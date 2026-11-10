@@ -1,0 +1,76 @@
+{
+  "name": "@sim/engine",
+  "version": "0.1.0",
+  "description": "Core simulation engine for web simulation games - ECS, Game Loop, Systems",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./core": {
+      "import": "./dist/core/index.js",
+      "types": "./dist/core/index.d.ts"
+    },
+    "./systems": {
+      "import": "./dist/systems/index.js",
+      "types": "./dist/systems/index.d.ts"
+    },
+    "./components": {
+      "import": "./dist/components/index.js",
+      "types": "./dist/components/index.d.ts"
+    },
+    "./network": {
+      "import": "./dist/network/index.js",
+      "types": "./dist/network/index.d.ts"
+    },
+    "./math": {
+      "import": "./dist/math/index.js",
+      "types": "./dist/math/index.d.ts"
+    },
+    "./devtools": {
+      "import": "./dist/devtools/index.js",
+      "types": "./dist/devtools/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo": "vite demo/index.html",
+    "demo:build": "vite build demo/index.html",
+    "lint": "eslint src --ext ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "ecs",
+    "game-engine",
+    "simulation",
+    "game-loop",
+    "deterministic"
+  ],
+  "author": "Simulation Game Team",
+  "license": "MIT",
+  "dependencies": {
+    "seedrandom": "^3.0.5",
+    "@msgpack/msgpack": "^3.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.4.0",
+    "vite": "^5.2.0",
+    "@types/seedrandom": "^3.0.0",
+    "pixi.js": "^8.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false
+}

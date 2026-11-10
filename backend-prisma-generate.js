@@ -1,0 +1,1 @@
+require('child_process').execSync('npx prisma generate', {stdio: 'inherit', cwd: 'D:\\descargas\\Angel\\Project simulator\\backend'})

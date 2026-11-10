@@ -1,0 +1,1 @@
+require('child_process').execSync('docker-compose up -d postgres redis maildev', {stdio: 'inherit', cwd: 'D:\\descargas\\Angel\\Project simulator\\backend'})

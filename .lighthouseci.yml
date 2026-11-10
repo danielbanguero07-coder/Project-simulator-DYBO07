@@ -1,0 +1,41 @@
+# Lighthouse CI Configuration
+# Integrado en GitHub Actions (.github/workflows/perf-ci.yml)
+# Se ejecuta en cada Push/PR a main/staging/feature/*.
+# Fallos >= 5% de regresión en Performance Score bloquean el PR (Hard Gate).
+
+ci:
+  collect:
+    url:
+      - https://staging.simulator-game.com/
+      - https://staging.simulator-game.com/tutorial
+      - https://staging.simulator-game.com/base
+
+  assert:
+    assertions:
+      # --- Core Web Vitals (Mobile 4G Emulation) ---
+      performance: [error, { minScore: 90 }]
+      largest-contentful-paint: [error, { maxDuration: 2200 }] # < 2.2s
+      cumulative-layout-shift: [warn, { maxLength: 0.02 }]
+      interactive-to-next-paint: [warn, { maxDuration: 150 }]   # < 150ms
+      total-blocking-time: [warn, { maxDuration: 200 }]        # < 200ms
+      first-input-delay: [warn, { maxDuration: 100 }]
+
+      # --- Resource Budgets (via Lighthouse Audits) ---
+      uses-optimized-images: [error]
+      uses-responsive-images: [error]
+      uses-modern-image-formats: [warn]
+      uses-text-compression: [error]
+      uses-long-cache: [warn]
+
+      # --- Memory & Runtime (via custom Lighthouse User Journey) ---
+      # Estos se validan en Playwright (ver .github/workflows/perf-ci.yml)
+      # y se reportan como artifacts de Lighthouse.
+
+  upload:
+    directory: ./lighthouse-ci-results
+    addLighthouseReportURL: true
+    storageBucketName: lighthouse-ci-bucket-simulator
+
+# --- Configuración de Entorno (Lighthouse CI) ---
+# Se define en el workflow de GH Actions (ver .github/workflows/perf-ci.yml)
+# para que use Moto G4 / iPhone 8 profiles y emulación de 4G.

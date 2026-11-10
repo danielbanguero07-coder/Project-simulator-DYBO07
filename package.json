@@ -1,0 +1,24 @@
+{
+  "name": "project-simulator",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "analyze:bundle": "ts-node scripts/analyze-bundle.ts",
+    "analyze:assets": "ts-node scripts/analyze-assets.ts",
+    "test:stress": "playwright test tests/stress.spec.ts",
+    "assert:stress": "ts-node scripts/assert-stress.ts"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "autoprefixer": "^10.6.2",
+    "comlink": "^4.4.1",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.6"
+  }
+}

@@ -1,0 +1,133 @@
+version: '3.8'
+
+services:
+  # Base de datos PostgreSQL
+  postgres:
+    image: postgres:16-alpine
+    container_name: simulator-postgres
+    environment:
+      POSTGRES_DB: simulator
+      POSTGRES_USER: simulator
+      POSTGRES_PASSWORD: simulator
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U simulator -d simulator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - simulator-network
+
+  # Redis para cache y pub/sub WebSocket
+  redis:
+    image: redis:7-alpine
+    container_name: simulator-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - simulator-network
+
+  # Maildev para testing de emails en desarrollo
+  maildev:
+    image: maildev/maildev:latest
+    container_name: simulator-maildev
+    ports:
+      - "1080:1080"  # Web UI
+      - "1025:1025"  # SMTP
+    networks:
+      - simulator-network
+
+  # LocalStack para emular servicios AWS localmente (opcional)
+  localstack:
+    image: localstack/localstack:latest
+    container_name: simulator-localstack
+    environment:
+      - SERVICES=s3,secretsmanager,ssm
+      - DEBUG=1
+      - AWS_DEFAULT_REGION=us-east-1
+    ports:
+      - "4566:4566"
+      - "4510-4559:4510-4559"
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - simulator-network
+
+  # Backend API (HTTP + WebSocket) - Definido por @backend-developer
+  # Este servicio será extendido/override por el docker-compose del backend
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: simulator-backend
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - DATABASE_URL=postgresql://simulator:simulator@postgres:5432/simulator
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=dev-secret-change-in-production
+      - LOG_LEVEL=debug
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/backend:/app
+      - /app/node_modules
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - simulator-network
+
+  # Frontend (Vite dev server)
+  frontend:
+    build:
+      context: ./apps/frontend
+      dockerfile: Dockerfile.dev
+    container_name: simulator-frontend
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=http://localhost:3000
+      - VITE_WS_URL=ws://localhost:3000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./apps/frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    networks:
+      - simulator-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  localstack_data:
+
+networks:
+  simulator-network:
+    driver: bridge

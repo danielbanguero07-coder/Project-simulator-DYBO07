@@ -1,0 +1,1 @@
+require('child_process').execSync('"C:\\Users\\USUARIO\\AppData\\Roaming\\npm\\node_modules\\pnpm\\node_modules\\@pnpm\\exe.win32-x64\\pnpm.exe" add joi @sentry/node @opentelemetry/resources @opentelemetry/semantic-conventions redis', {stdio: 'inherit', cwd: 'D:\\descargas\\Angel\\Project simulator\\backend'})

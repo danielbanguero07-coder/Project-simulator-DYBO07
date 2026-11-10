@@ -1,0 +1,189 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: sim-postgres
+    environment:
+      POSTGRES_DB: simulation_game
+      POSTGRES_USER: simulation
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-simulation_dev_password}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U simulation -d simulation_game"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - sim-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Redis Cache & Pub/Sub
+  redis:
+    image: redis:7-alpine
+    container_name: sim-redis
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - sim-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Maildev for local email testing
+  maildev:
+    image: maildev/maildev:latest
+    container_name: sim-maildev
+    ports:
+      - "1080:1080"  # Web UI
+      - "1025:1025"  # SMTP
+    environment:
+      - MAILDEV_SMTP_PORT=1025
+      - MAILDEV_WEB_PORT=1080
+      - MAILDEV_AUTO_RELAY=true
+      - MAILDEV_AUTO_RELAY_HOST=localhost
+      - MAILDEV_AUTO_RELAY_PORT=1025
+    networks:
+      - sim-network
+    restart: unless-stopped
+
+  # Backend API + WebSocket
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: runner
+    container_name: sim-backend
+    environment:
+      # Application
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      HOST: 0.0.0.0
+
+      # Database
+      DATABASE_URL: postgresql://simulation:${POSTGRES_PASSWORD:-simulation_dev_password}@postgres:5432/simulation_game?schema=public
+
+      # Redis
+      REDIS_URL: redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379
+
+      # JWT
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-min-32-chars-change-in-production}
+      JWT_ACCESS_TTL: 15m
+      JWT_REFRESH_TTL: 7d
+
+      # Bcrypt
+      BCRYPT_ROUNDS: 12
+
+      # Throttler
+      THROTTLE_TTL: 60000
+      THROTTLE_LIMIT: 100
+
+      # CORS
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://localhost:1080
+
+      # Simulation
+      SIM_TICK_RATE: 20
+      SIM_MAX_PLAYERS_PER_WORLD: 5000
+      SIM_STATE_BROADCAST_INTERVAL: 50
+
+      # Observability
+      LOG_LEVEL: debug
+      METRICS_ENABLED: "true"
+      TRACING_ENABLED: "true"
+
+      # Mail
+      MAIL_HOST: maildev
+      MAIL_PORT: 1025
+      MAIL_FROM: noreply@simulation.game
+
+    ports:
+      - "3000:3000"
+      - "9464:9464"  # Prometheus metrics (OpenTelemetry)
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      maildev:
+        condition: service_started
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - sim-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 1G
+          cpus: '1'
+
+  # Frontend (Vite dev server) - placeholder
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile.dev
+  #   container_name: sim-frontend
+  #   environment:
+  #     - VITE_API_URL=http://localhost:3000/api
+  #     - VITE_WS_URL=ws://localhost:3000
+  #   ports:
+  #     - "5173:5173"
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #   networks:
+  #     - sim-network
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  sim-network:
+    driver: bridge
+    name: simulation-network

@@ -1,0 +1,1 @@
+require('child_process').execSync('"C:\\Program Files\\PostgreSQL\\18\\bin\\psql.exe" -U postgres -c "SELECT version();"', {stdio: 'inherit', env: {...process.env, PGPASSWORD: ''}})

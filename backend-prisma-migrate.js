@@ -1,0 +1,1 @@
+require('child_process').execSync('npx prisma migrate dev --name init', {stdio: 'inherit', cwd: 'D:\\descargas\\Angel\\Project simulator\\backend'})

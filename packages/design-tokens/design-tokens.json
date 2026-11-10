@@ -1,0 +1,128 @@
+{
+  "$schema": "https://docs.style-dictionary.xyz/schema.json",
+  "source": [
+    "src/tokens/**/*.json"
+  ],
+  "placements": {
+    "npm": {
+      "transformGroup": "npm",
+      "ext": ".js",
+      "filePath": "{{pascalCase name}}"
+    },
+    "css": {
+      "transformGroup": "css",
+      "ext": ".css",
+      "filePath": "tokens.css"
+    },
+    "ts": {
+      "transformGroup": "ts",
+      "ext": ".ts",
+      "filePath": "tokens.ts"
+    }
+  },
+  "components": [
+    {
+      "name": "colors",
+      "alias": "color",
+      "fileLabel": "colors",
+      "transformGroup": "color",
+      "dataType": "color",
+      "tags": ["color", "ui"],
+      "properties": {
+        "color": true
+      }
+    },
+    {
+      "name": "spacing",
+      "alias": "space",
+      "fileLabel": "spacing",
+      "transformGroup": "spacing",
+      "dataType": "spacing",
+      "tags": ["space", "layout"],
+      "properties": {
+        "spacing": true
+      }
+    },
+    {
+      "name": "typography",
+      "alias": "type",
+      "fileLabel": "typography",
+      "transformGroup": "typography",
+      "dataType": "typography",
+      "tags": ["type", "font"],
+      "properties": {
+        "typography": true
+      }
+    },
+    {
+      "name": "radius",
+      "alias": "radius",
+      "fileLabel": "radius",
+      "transformGroup": "radius",
+      "dataType": "radius",
+      "tags": ["radius", "border"],
+      "properties": {
+        "radius": true
+      }
+    },
+    {
+      "name": "shadow",
+      "alias": "shadow",
+      "fileLabel": "shadow",
+      "transformGroup": "shadow",
+      "dataType": "shadow",
+      "tags": ["shadow", "effect"],
+      "properties": {
+        "shadow": true
+      }
+    },
+    {
+      "name": "motion",
+      "alias": "motion",
+      "fileLabel": "motion",
+      "transformGroup": "motion",
+      "dataType": "motion",
+      "tags": ["motion", "animation"],
+      "properties": {
+        "motion": true
+      }
+    },
+    {
+      "name": "zindex",
+      "alias": "zIndex",
+      "fileLabel": "zIndex",
+      "transformGroup": "zIndex",
+      "dataType": "zIndex",
+      "tags": ["zIndex", "stacking"],
+      "properties": {
+        "zIndex": true
+      }
+    },
+    {
+      "name": "icons",
+      "alias": "icon",
+      "fileLabel": "icons",
+      "transformGroup": "icon",
+      "dataType": "number",
+      "tags": ["icon", "size"],
+      "properties": {
+        "iconSize": true
+      }
+    }
+  ],
+  "global": {
+    "designTokens": {
+      "group": "SIM Design System",
+      "name": "SIM Design Tokens",
+      "description": "Design tokens for Simulation Game Web (city-builder / economy). Base unit: 8px / 128px sprite grid. Scale: mobile-first, responsive.",
+      "primaryColor": "#1A1B26",
+      "secondaryColor": "#2F313F",
+      "tertiaryColor": "#8B949E",
+      "quaternaryColor": "#E0E4DC",
+      "accentColor": "#FFD700",
+      "alertColor": "#FF5F57",
+      "successColor": "#38B238",
+      "warningColor": "#FFA502"
+    }
+  }
+}

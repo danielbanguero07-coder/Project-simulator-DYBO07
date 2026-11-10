@@ -1,0 +1,2 @@
+Este agente está bloqueado por permisos de escritura en el sandbox.
+Verificar si se pueden crear archivos con un test simple.

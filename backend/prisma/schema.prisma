@@ -1,0 +1,482 @@
+// Prisma Schema v1 - Core Entities for Simulation Game Backend
+// Generated for PostgreSQL with Prisma 5.8+
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum UserRole {
+  PLAYER
+  MODERATOR
+  ADMIN
+  DEVELOPER
+}
+
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  APPLE
+  STEAM
+  DISCORD
+}
+
+enum TransactionType {
+  EARN
+  SPEND
+  TRANSFER_IN
+  TRANSFER_OUT
+  REWARD
+  PURCHASE
+  SALE
+  REFUND
+  DAILY_BONUS
+  QUEST_REWARD
+}
+
+enum CurrencyType {
+  GOLD
+  PREMIUM
+  EVENT
+}
+
+enum BuildingStatus {
+  IDLE
+  PRODUCING
+  UPGRADING
+  CONSTRUCTING
+  DAMAGED
+  DESTROYED
+}
+
+enum ClanRole {
+  LEADER
+  OFFICER
+  MEMBER
+}
+
+enum ClanInviteStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum FriendStatus {
+  PENDING
+  ACCEPTED
+  BLOCKED
+}
+
+enum WorldStatus {
+  ACTIVE
+  MAINTENANCE
+  ARCHIVED
+}
+
+// ============================================================
+// CORE MODELS
+// ============================================================
+
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique @db.VarChar(255)
+  username          String    @unique @db.VarChar(50)
+  passwordHash      String    @db.VarChar(255)
+  refreshTokenHash  String?   @db.VarChar(255)
+
+  // Profile
+  displayName       String?   @db.VarChar(100)
+  avatarUrl         String?   @db.VarChar(500)
+  bio               String?   @db.Text
+
+  // Auth & Security
+  roles             UserRole[] @default([PLAYER])
+  authProvider      AuthProvider @default(LOCAL)
+  providerId        String?   @db.VarChar(100)
+  isActive          Boolean   @default(true)
+  isEmailVerified   Boolean   @default(false)
+  isBanned          Boolean   @default(false)
+  banReason         String?   @db.Text
+  banExpiresAt      DateTime?
+  lastLoginAt       DateTime?
+  emailVerifiedAt   DateTime?
+  passwordChangedAt DateTime?
+
+  // 2FA
+  twoFactorEnabled  Boolean   @default(false)
+  twoFactorSecret   String?   @db.VarChar(100)
+  backupCodes       String[]  @default([])
+
+  // Timestamps
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  deletedAt         DateTime?
+
+  // Relations
+  player            Player?
+  sessions          Session[]
+  transactions      Transaction[]
+  clanMember        ClanMember?
+  friendRequests    Friend[]     @relation("FriendRequests")
+  friends           Friend[]     @relation("Friends")
+  clanInvitesSent   ClanInvite[] @relation("ClanInvitesSent")
+  clanInvitesRecv   ClanInvite[] @relation("ClanInvitesReceived")
+  ledClans          Clan[]       @relation("ClanLeader")
+
+  @@index([email])
+  @@index([username])
+  @@index([isActive])
+  @@index([authProvider, providerId])
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  userAgent    String?  @db.Text
+  ipAddress    String?  @db.VarChar(45)
+  deviceInfo   Json?
+  refreshToken String   @unique @db.VarChar(500)
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  revokedAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshToken])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model Player {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  displayName        String   @db.VarChar(50)
+  avatarUrl          String?  @db.VarChar(500)
+  bio                String?  @db.Text
+
+  // Progression
+  level              Int      @default(1)
+  experience         BigInt   @default(0)
+  totalPlayTime      Int      @default(0) // seconds
+
+  // Economy
+  gold               BigInt   @default(0)
+  premiumCurrency    BigInt   @default(0)
+
+  // Statistics
+  buildingsBuilt     Int      @default(0)
+  resourcesCollected BigInt   @default(0)
+  tradesCompleted    Int      @default(0)
+
+  // Social
+  clanId             String?
+
+  // Settings
+  settings           Json     @default("{}")
+
+  // Timestamps
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clan     Clan?      @relation("ClanPlayers", fields: [clanId], references: [id], onDelete: SetNull)
+  buildings Building[]
+  inventory InventoryItem[]
+
+  @@index([clanId])
+  @@index([level])
+  @@index([gold])
+  @@map("players")
+}
+
+model World {
+  id            String      @id @default(cuid())
+  name          String      @db.VarChar(100)
+  description   String?     @db.Text
+  status        WorldStatus @default(ACTIVE)
+  currentTick   BigInt      @default(0)
+  maxPlayers    Int         @default(5000)
+  settings      Json        @default("{}")
+
+  // Timestamps
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  archivedAt    DateTime?
+
+  // Relations
+  buildings Building[]
+  resources Resource[]
+
+  @@index([status])
+  @@map("worlds")
+}
+
+model Building {
+  id                String         @id @default(cuid())
+  worldId           String
+  playerId          String
+  templateId        String         @db.VarChar(100)
+  level             Int            @default(1)
+  positionX         Int
+  positionY         Int
+  status            BuildingStatus @default(IDLE)
+  progress          Float          @default(0) // 0.0 - 1.0
+  productionEndAt   DateTime?
+  storedResources   Json           @default("{}") // { "gold": 100, "wood": 50 }
+
+  // Timestamps
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  completedAt       DateTime?
+
+  // Relations
+  world   World   @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  player  Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, positionX, positionY])
+  @@index([worldId])
+  @@index([playerId])
+  @@index([templateId])
+  @@index([status])
+  @@map("buildings")
+}
+
+model Resource {
+  id          String   @id @default(cuid())
+  worldId     String
+  type        String   @db.VarChar(50)
+  amount      Float    @default(0)
+  rate        Float    @default(0) // per second
+  capacity    Float    @default(10000)
+
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@unique([worldId, type])
+  @@index([worldId])
+  @@map("resources")
+}
+
+// ============================================================
+// ECONOMY MODELS
+// ============================================================
+
+model Transaction {
+  id              String            @id @default(cuid())
+  userId          String
+  type            TransactionType
+  currency        CurrencyType
+  amount          Int               // positive for credit, negative for debit
+  balanceBefore   BigInt
+  balanceAfter    BigInt
+  referenceId     String?           @db.VarChar(100)
+  referenceType   String?           @db.VarChar(50)
+  description     String?           @db.Text
+  metadata        Json              @default("{}")
+
+  createdAt       DateTime          @default(now())
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerEntries   LedgerEntry[]
+
+  @@index([userId, createdAt])
+  @@index([type])
+  @@index([currency])
+  @@index([referenceId, referenceType])
+  @@map("transactions")
+}
+
+model LedgerEntry {
+  id            String   @id @default(cuid())
+  transactionId String
+  account       String   @db.VarChar(100) // e.g., "player:123:gold", "system:revenue:gold"
+  debit         Int      @default(0)
+  credit        Int      @default(0)
+  balance       BigInt   // running balance for this account
+
+  createdAt     DateTime @default(now())
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId])
+  @@index([account, createdAt])
+  @@map("ledger_entries")
+}
+
+// ============================================================
+// SOCIAL MODELS
+// ============================================================
+
+model Clan {
+  id          String   @id @default(cuid())
+  name        String   @unique @db.VarChar(50)
+  tag         String   @unique @db.VarChar(10)
+  description String?  @db.Text
+  isPublic    Boolean  @default(true)
+  bannerUrl   String?  @db.VarChar(500)
+  leaderId    String
+  level       Int      @default(1)
+  experience  BigInt   @default(0)
+  maxMembers  Int      @default(50)
+
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  leader     User          @relation("ClanLeader", fields: [leaderId], references: [id], onDelete: Restrict)
+  members    ClanMember[]
+  invites    ClanInvite[]   @relation("ClanInvites")
+  players    Player[]      @relation("ClanPlayers")
+
+  @@index([name])
+  @@index([tag])
+  @@map("clans")
+}
+
+model ClanMember {
+  id        String    @id @default(cuid())
+  clanId    String
+  userId    String    @unique
+  role      ClanRole  @default(MEMBER)
+  contribution BigInt @default(0)
+  joinedAt  DateTime  @default(now())
+
+  clan Clan @relation(fields: [clanId], references: [id], onDelete: Cascade)
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([clanId])
+  @@index([userId])
+  @@map("clan_members")
+}
+
+model ClanInvite {
+  id           String            @id @default(cuid())
+  clanId       String
+  inviterId    String
+  targetUserId String
+  status       ClanInviteStatus  @default(PENDING)
+  message      String?           @db.Text
+  expiresAt    DateTime
+
+  createdAt    DateTime          @default(now())
+  respondedAt  DateTime?
+
+  clan    Clan @relation("ClanInvites", fields: [clanId], references: [id], onDelete: Cascade)
+  inviter User @relation("ClanInvitesSent", fields: [inviterId], references: [id], onDelete: Cascade)
+  target  User @relation("ClanInvitesReceived", fields: [targetUserId], references: [id], onDelete: Cascade)
+
+  @@unique([clanId, targetUserId, status])
+  @@index([targetUserId, status])
+  @@index([expiresAt])
+  @@map("clan_invites")
+}
+
+model Friend {
+  id        String       @id @default(cuid())
+  userId    String
+  friendId  String
+  status    FriendStatus @default(PENDING)
+
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  user   User @relation("FriendRequests", fields: [userId], references: [id], onDelete: Cascade)
+  friend User @relation("Friends", fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, friendId])
+  @@index([friendId, status])
+  @@map("friends")
+}
+
+// ============================================================
+// INVENTORY / ITEMS
+// ============================================================
+
+model InventoryItem {
+  id        String @id @default(cuid())
+  playerId  String
+  itemId    String @db.VarChar(100)
+  quantity  Int    @default(1)
+  metadata  Json   @default("{}")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, itemId])
+  @@index([playerId])
+  @@index([itemId])
+  @@map("inventory_items")
+}
+
+model ItemTemplate {
+  id          String   @id @db.VarChar(100)
+  name        String   @db.VarChar(100)
+  description String?  @db.Text
+  type        String   @db.VarChar(50) // resource, consumable, equipment, building, decoration
+  rarity      String   @db.VarChar(20) @default("common")
+  maxStack    Int      @default(999)
+  sellPrice   Int      @default(0)
+  buyPrice    Int?     // null = not purchasable
+  metadata    Json     @default("{}")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([type])
+  @@index([rarity])
+  @@map("item_templates")
+}
+
+// ============================================================
+// AUDIT / EVENT SOURCING
+// ============================================================
+
+model GameEvent {
+  id          String   @id @default(cuid())
+  worldId     String?
+  playerId    String?
+  type        String   @db.VarChar(100)
+  payload     Json
+  tick        BigInt?
+  metadata    Json     @default("{}")
+
+  createdAt   DateTime @default(now())
+
+  @@index([worldId, createdAt])
+  @@index([playerId, createdAt])
+  @@index([type])
+  @@index([tick])
+  @@map("game_events")
+}
+
+model WorldSnapshot {
+  id        String   @id @default(cuid())
+  worldId   String
+  tick      BigInt
+  data      Json     // Full world state snapshot
+  size      Int      // bytes
+
+  createdAt DateTime @default(now())
+
+  @@index([worldId, tick])
+  @@map("world_snapshots")
+}

@@ -1,0 +1,2 @@
+const { execSync } = require('child_process');
+execSync('"C:\\Users\\USUARIO\\AppData\\Roaming\\npm\\node_modules\\pnpm\\node_modules\\@pnpm\\exe.win32-x64\\pnpm.exe" install pg ioredis', {stdio: 'inherit', cwd: 'D:\\descargas\\Angel\\Project simulator\\backend'});

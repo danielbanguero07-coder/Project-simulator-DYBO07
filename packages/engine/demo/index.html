@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>@sim/engine - 10k Entities Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'JetBrains Mono', 'Fira Code', monospace; background: #0a0a0a; color: #0f0; min-height: 100vh; }
+    #canvas { display: block; width: 100%; height: calc(100vh - 120px); background: #111; }
+    .hud { position: fixed; top: 10px; left: 10px; z-index: 100; pointer-events: none; }
+    .hud-panel { background: rgba(0,0,0,0.85); border: 1px solid #0f0; padding: 12px; border-radius: 4px; min-width: 280px; }
+    .hud-row { display: flex; justify-content: space-between; margin: 4px 0; }
+    .hud-label { color: #8f8; }
+    .hud-value { color: #0f0; font-weight: bold; font-variant-numeric: tabular-nums; }
+    .hud-value.warning { color: #ff0; }
+    .hud-value.danger { color: #f44; }
+    .controls { position: fixed; bottom: 10px; left: 10px; z-index: 100; pointer-events: auto; }
+    .controls-panel { background: rgba(0,0,0,0.85); border: 1px solid #0f0; padding: 12px; border-radius: 4px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .btn { background: transparent; border: 1px solid #0f0; color: #0f0; padding: 6px 12px; border-radius: 3px; cursor: pointer; font-family: inherit; font-size: 11px; }
+    .btn:hover { background: #0f0; color: #000; }
+    .btn.active { background: #0f0; color: #000; }
+    .legend { position: fixed; top: 10px; right: 10px; z-index: 100; pointer-events: none; }
+    .legend-panel { background: rgba(0,0,0,0.85); border: 1px solid #0f0; padding: 12px; border-radius: 4px; font-size: 11px; }
+    .legend-item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+    .legend-color { width: 16px; height: 16px; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div class="hud">
+    <div class="hud-panel">
+      <div class="hud-row"><span class="hud-label">FPS:</span><span id="fps" class="hud-value">--</span></div>
+      <div class="hud-row"><span class="hud-label">Tick:</span><span id="tick" class="hud-value">0</span></div>
+      <div class="hud-row"><span class="hud-label">Entities:</span><span id="entities" class="hud-value">0</span></div>
+      <div class="hud-row"><span class="hud-label">Alive:</span><span id="alive" class="hud-value">0</span></div>
+      <div class="hud-row"><span class="hud-label">Sim Time:</span><span id="simTime" class="hud-value">0ms</span></div>
+      <div class="hud-row"><span class="hud-label">Buildings:</span><span id="buildings" class="hud-value">0</span></div>
+      <div class="hud-row"><span class="hud-label">Producing:</span><span id="producing" class="hud-value">0</span></div>
+      <div class="hud-row"><span class="hud-label">Gold:</span><span id="gold" class="hud-value">0</span></div>
+      <div class="hud-row"><span class="hud-label">Population:</span><span id="pop" class="hud-value">0/0</span></div>
+    </div>
+  </div>
+  
+  <div class="legend">
+    <div class="legend-panel">
+      <div class="legend-item"><div class="legend-color" style="background:#4a4"></div><span>Idle</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#4f4"></div><span>Producing</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#ff4"></div><span>Building</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#f84"></div><span>Upgrading</span></div>
+      <div class="legend-item"><div class="legend-color" style="background:#f44"></div><span>Damaged</span></div>
+    </div>
+  </div>
+  
+  <canvas id="canvas"></canvas>
+  
+  <div class="controls">
+    <div class="controls-panel">
+      <button id="btn-pause" class="btn">Pause</button>
+      <button id="btn-step" class="btn">Step</button>
+      <button id="btn-spawn100" class="btn">Spawn 100</button>
+      <button id="btn-spawn1k" class="btn">Spawn 1k</button>
+      <button id="btn-spawn10k" class="btn">Spawn 10k</button>
+      <button id="btn-clear" class="btn">Clear</button>
+      <label style="color:#0f0;margin-left:auto;display:flex;align-items:center;gap:8px;">
+        Speed: <input type="range" id="speed" min="0.1" max="5" step="0.1" value="1" style="width:100px">
+        <span id="speedVal">1.0x</span>
+      </label>
+    </div>
+  </div>
+
+  <script type="module">
+    // Simple ECS implementation for demo (inlined for standalone)
+    const MAX_ENTITIES = 50000;
+    
+    // Component storage (SoA)
+    const buildingId = new Uint32Array(MAX_ENTITIES);
+    const buildingLevel = new Uint16Array(MAX_ENTITIES);
+    const buildingState = new Uint8Array(MAX_ENTITIES);
+    const buildingOwner = new Uint32Array(MAX_ENTITIES);
+    const buildingPosX = new Float32Array(MAX_ENTITIES);
+    const buildingPosY = new Float32Array(MAX_ENTITIES);
+    const buildingProgress = new Float32Array(MAX_ENTITIES);
+    const buildingEfficiency = new Float32Array(MAX_ENTITIES);
+    const buildingLastTick = new Uint32Array(MAX_ENTITIES);
+    const buildingProdRate = new Float64Array(MAX_ENTITIES);
+    
+    const prodResourceType = new Uint8Array(MAX_ENTITIES);
+    const prodRatePerTick = new Float64Array(MAX_ENTITIES);
+    const prodLastTick = new Uint32Array(MAX_ENTITIES);
+    const prodAccumulator = new Float64Array(MAX_ENTITIES);
+    
+    const storageGold = new Float64Array(MAX_ENTITIES);
+    const storageWood = new Float64Array(MAX_ENTITIES);
+    const storageStone = new Float64Array(MAX_ENTITIES);
+    const storageFood = new Float64Array(MAX_ENTITIES);
+    const storageEnergy = new Float64Array(MAX_ENTITIES);
+    const storageCapGold = new Float64Array(MAX_ENTITIES);
+    const storageCapWood = new Float64Array(MAX_ENTITIES);
+    const storageCapStone = new Float64Array(MAX_ENTITIES);
+    const storageCapFood = new Float64Array(MAX_ENTITIES);
+    const storageCapEnergy = new Float64Array(MAX_ENTITIES);
+    
+    const popPopulation = new Uint32Array(MAX_ENTITIES);
+    const popCapacity = new Uint32Array(MAX_ENTITIES);
+    const popHappiness = new Float32Array(MAX_ENTITIES);
+    const popGrowthRate = new Float32Array(MAX_ENTITIES);
+    
+    const marketLastTrade = new Uint32Array(MAX_ENTITIES);
+    const marketTradesHour = new Uint16Array(MAX_ENTITIES);
+    const marketBuyCD = new Uint32Array(MAX_ENTITIES);
+    const marketSellCD = new Uint32Array(MAX_ENTITIES);
+    
+    const alive = new Uint8Array(MAX_ENTITIES);
+    const version = new Uint32Array(MAX_ENTITIES);
+    
+    // Constants
+    const BuildingType = { WOODCUTTER: 1, STONE_MINE: 2, GENERATOR: 3, HOUSE: 4 };
+    const BuildingState = { IDLE: 0, PRODUCING: 1, UPGRADING: 2, DAMAGED: 3, BUILDING: 4 };
+    const ResourceType = { GOLD: 0, WOOD: 1, STONE: 2, FOOD: 3, ENERGY: 4 };
+    
+    const UPKEEP_BASE = [0, 0.5, 0.6, 0.8, 0.3];
+    const BASE_RATES = [0, 0.5, 0.6, 1.0, 0];
+    const BUILD_TIMES = [0, 300, 360, 420, 180];
+    const UPGRADE_MULT = 1.35;
+    const DAILY_TAX = 0.005;
+    const MARKET_BUY_MULT = 0.8;
+    const MARKET_SELL_MULT = 0.6;
+    const BASE_VALUES = [1.0, 0.8, 1.2, 1.0, 0.5];
+    
+    // World state
+    let entityCount = 0;
+    let aliveCount = 0;
+    let tick = 0;
+    let time = 0;
+    const freeList = [];
+    const playerId = 0; // Entity 0 is the player
+    
+    // Canvas setup
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    let canvasWidth = 0;
+    let canvasHeight = 0;
+    
+    function resizeCanvas() {
+      canvasWidth = canvas.clientWidth;
+      canvasHeight = canvas.clientHeight;
+      canvas.width = canvasWidth * devicePixelRatio;
+      canvas.height = canvasHeight * devicePixelRatio;
+      ctx.scale(devicePixelRatio, devicePixelRatio);
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+    
+    // Entity management
+    function createEntity() {
+      let entity;
+      if (freeList.length > 0) {
+        entity = freeList.pop();
+      } else if (entityCount < MAX_ENTITIES) {
+        entity = entityCount++;
+      } else {
+        return -1;
+      }
+      alive[entity] = 1;
+      version[entity]++;
+      aliveCount++;
+      return entity;
+    }
+    
+    function destroyEntity(entity) {
+      if (entity < 0 || entity >= entityCount || !alive[entity]) return false;
+      alive[entity] = 0;
+      aliveCount--;
+      freeList.push(entity);
+      return true;
+    }
+    
+    function isAlive(entity) {
+      return entity >= 0 && entity < entityCount && alive[entity] === 1;
+    }
+    
+    // Initialize player
+    function initPlayer() {
+      storageGold[playerId] = 10000;
+      storageWood[playerId] = 5000;
+      storageStone[playerId] = 5000;
+      storageFood[playerId] = 5000;
+      storageEnergy[playerId] = 5000;
+      
+      storageCapGold[playerId] = 100000;
+      storageCapWood[playerId] = 10000;
+      storageCapStone[playerId] = 10000;
+      storageCapFood[playerId] = 10000;
+      storageCapEnergy[playerId] = 10000;
+      
+      popPopulation[playerId] = 10;
+      popCapacity[playerId] = 100;
+      popHappiness[playerId] = 1.0;
+      popGrowthRate[playerId] = 0.01;
+      
+      marketLastTrade[playerId] = 0;
+      marketTradesHour[playerId] = 0;
+      marketBuyCD[playerId] = 0;
+      marketSellCD[playerId] = 0;
+    }
+    initPlayer();
+    
+    // Building creation
+    function createBuilding(type, x, y) {
+      const cost = getBuildCost(type, 1);
+      if (storageGold[playerId] < cost.gold || storageWood[playerId] < cost.wood || 
+          storageStone[playerId] < cost.stone || storageEnergy[playerId] < cost.energy) {
+        return -1;
+      }
+      
+      storageGold[playerId] -= cost.gold;
+      storageWood[playerId] -= cost.wood;
+      storageStone[playerId] -= cost.stone;
+      storageEnergy[playerId] -= cost.energy;
+      
+      const entity = createEntity();
+      if (entity < 0) return -1;
+      
+      buildingId[entity] = type;
+      buildingLevel[entity] = 1;
+      buildingState[entity] = BuildingState.BUILDING;
+      buildingOwner[entity] = playerId;
+      buildingPosX[entity] = x;
+      buildingPosY[entity] = y;
+      buildingProgress[entity] = 0;
+      buildingEfficiency[entity] = 1.0;
+      buildingLastTick[entity] = tick;
+      buildingProdRate[entity] = 0;
+      
+      prodResourceType[entity] = getResourceTypeForBuilding(type);
+      prodRatePerTick[entity] = 0;
+      prodLastTick[entity] = tick;
+      prodAccumulator[entity] = 0;
+      
+      return entity;
+    }
+    
+    function getBuildCost(type, level) {
+      const configs = [
+        { g:0,w:0,s:0,e:0 },
+        { g:100,w:50,s:0,e:0 },     // WOODCUTTER
+        { g:120,w:0,s:60,e:0 },     // STONE_MINE
+        { g:150,w:0,s:80,e:0 },     // GENERATOR
+        { g:80,w:40,s:0,e:0 },      // HOUSE
+      ];
+      const base = configs[type];
+      const mult = Math.pow(UPGRADE_MULT, level - 1);
+      return {
+        gold: Math.floor(base.g * mult),
+        wood: Math.floor(base.w * mult),
+        stone: Math.floor(base.s * mult),
+        energy: Math.floor(base.e * mult),
+      };
+    }
+    
+    function getResourceTypeForBuilding(type) {
+      switch (type) {
+        case BuildingType.WOODCUTTER: return ResourceType.GOLD;
+        case BuildingType.STONE_MINE: return ResourceType.STONE;
+        case BuildingType.GENERATOR: return ResourceType.ENERGY;
+        case BuildingType.HOUSE: return ResourceType.FOOD;
+        default: return ResourceType.GOLD;
+      }
+    }
+    
+    function getBaseRate(type) {
+      return BASE_RATES[type] || 0;
+    }
+    
+    function getBuildTime(type, level) {
+      return BUILD_TIMES[type] * Math.pow(UPGRADE_MULT, level - 1);
+    }
+    
+    // Systems
+    function buildingUpgradeSystem(dt) {
+      const dtSec = dt / 1000;
+      for (let e = 1; e < entityCount; e++) {
+        if (!alive[e] || buildingId[e] === 0) continue;
+        
+        const state = buildingState[e];
+        if (state === BuildingState.BUILDING) {
+          const bt = getBuildTime(buildingId[e], 1);
+          buildingProgress[e] += dtSec / bt;
+          if (buildingProgress[e] >= 1) {
+            buildingState[e] = BuildingState.PRODUCING;
+            buildingProgress[e] = 1;
+            buildingLastTick[e] = tick;
+            buildingProdRate[e] = getBaseRate(buildingId[e]) * buildingLevel[e] * buildingEfficiency[e];
+            prodRatePerTick[e] = buildingProdRate[e];
+          }
+        } else if (state === BuildingState.UPGRADING) {
+          const level = buildingLevel[e];
+          const bt = getBuildTime(buildingId[e], level);
+          buildingProgress[e] += dtSec / bt;
+          if (buildingProgress[e] >= 1) {
+            buildingLevel[e] = level + 1;
+            buildingState[e] = BuildingState.PRODUCING;
+            buildingProgress[e] = 1;
+            buildingLastTick[e] = tick;
+            buildingProdRate[e] = getBaseRate(buildingId[e]) * buildingLevel[e] * buildingEfficiency[e];
+            prodRatePerTick[e] = buildingProdRate[e];
+          }
+        }
+      }
+    }
+    
+    function productionSystem(dt) {
+      for (let e = 1; e < entityCount; e++) {
+        if (!alive[e] || buildingId[e] === 0) continue;
+        if (buildingState[e] !== BuildingState.PRODUCING) continue;
+        
+        const owner = buildingOwner[e];
+        if (!isAlive(owner)) continue;
+        
+        const dtTicks = tick - buildingLastTick[e];
+        if (dtTicks <= 0) continue;
+        buildingLastTick[e] = tick;
+        
+        const rate = prodRatePerTick[e];
+        const eff = buildingEfficiency[e];
+        const resType = prodResourceType[e];
+        
+        prodAccumulator[e] += dtTicks * eff * rate;
+        
+        while (prodAccumulator[e] >= 1.0) {
+          const storage = getStorageArray(resType);
+          const cap = getCapArray(resType);
+          const current = storage[owner];
+          const capacity = cap[owner];
+          
+          if (current >= capacity) {
+            buildingState[e] = BuildingState.IDLE;
+            break;
+          }
+          
+          storage[owner] = current + 1;
+          prodAccumulator[e] -= 1.0;
+        }
+      }
+    }
+    
+    function upkeepSystem() {
+      if (tick % 288 !== 0) return;
+      
+      const playerUpkeep = new Map();
+      for (let e = 1; e < entityCount; e++) {
+        if (!alive[e] || buildingId[e] === 0) continue;
+        const owner = buildingOwner[e];
+        const upkeep = buildingLevel[e] * UPKEEP_BASE[buildingId[e]];
+        playerUpkeep.set(owner, (playerUpkeep.get(owner) || 0) + upkeep);
+      }
+      
+      for (const [pid, upkeep] of playerUpkeep) {
+        if (storageGold[pid] < upkeep) {
+          for (let e = 1; e < entityCount; e++) {
+            if (!alive[e] || buildingId[e] === 0) continue;
+            if (buildingOwner[e] === pid) buildingState[e] = BuildingState.DAMAGED;
+          }
+        } else {
+          storageGold[pid] -= upkeep;
+        }
+      }
+      
+      // Daily tax
+      for (let e = 0; e < entityCount; e++) {
+        if (!alive[e]) continue;
+        if (storageGold[e] === 0 && storageWood[e] === 0) continue;
+        
+        const resources = [storageGold, storageWood, storageStone, storageFood, storageEnergy];
+        for (const arr of resources) {
+          const tax = Math.floor(arr[e] * DAILY_TAX);
+          if (tax > 0) arr[e] -= tax;
+        }
+      }
+    }
+    
+    function populationSystem() {
+      if (tick % 288 !== 0) return;
+      
+      for (let e = 0; e < entityCount; e++) {
+        if (!alive[e] || popPopulation[e] === 0 && popCapacity[e] === 0) continue;
+        if (popPopulation[e] === 0) continue;
+        
+        const foodNeed = popPopulation[e] * 1.0;
+        const currentFood = storageFood[e];
+        
+        if (currentFood < foodNeed) {
+          const deficitRatio = currentFood / foodNeed;
+          popHappiness[e] = Math.max(0, popHappiness[e] - (1 - deficitRatio) * 0.2);
+          popGrowthRate[e] *= 0.9;
+          storageFood[e] = 0;
+        } else {
+          storageFood[e] = currentFood - foodNeed;
+          popHappiness[e] = Math.min(1, popHappiness[e] + 0.02);
+          const growth = Math.floor(popPopulation[e] * popGrowthRate[e] * popHappiness[e]);
+          if (growth > 0 && popPopulation[e] + growth <= popCapacity[e]) {
+            popPopulation[e] += growth;
+          } else if (popPopulation[e] + growth > popCapacity[e]) {
+            popPopulation[e] = popCapacity[e];
+          }
+        }
+        
+        // Overpopulation penalty
+        if (popPopulation[e] > popCapacity[e]) {
+          for (let i = 1; i < entityCount; i++) {
+            if (!alive[i] || buildingId[i] === 0) continue;
+            if (buildingOwner[i] === e) buildingEfficiency[i] = 0.8;
+          }
+        } else {
+          for (let i = 1; i < entityCount; i++) {
+            if (!alive[i] || buildingId[i] === 0) continue;
+            if (buildingOwner[i] === e) buildingEfficiency[i] = 1.0;
+          }
+        }
+      }
+    }
+    
+    function getStorageArray(type) {
+      switch (type) {
+        case ResourceType.GOLD: return storageGold;
+        case ResourceType.WOOD: return storageWood;
+        case ResourceType.STONE: return storageStone;
+        case ResourceType.FOOD: return storageFood;
+        case ResourceType.ENERGY: return storageEnergy;
+      }
+    }
+    
+    function getCapArray(type) {
+      switch (type) {
+        case ResourceType.GOLD: return storageCapGold;
+        case ResourceType.WOOD: return storageCapWood;
+        case ResourceType.STONE: return storageCapStone;
+        case ResourceType.FOOD: return storageCapFood;
+        case ResourceType.ENERGY: return storageCapEnergy;
+      }
+    }
+    
+    function updatePopulationCapacity() {
+      for (let e = 0; e < entityCount; e++) {
+        if (!alive[e] || popPopulation[e] === 0 && popCapacity[e] === 0) continue;
+        let cap = 0;
+        for (let i = 1; i < entityCount; i++) {
+          if (!alive[i] || buildingId[i] === 0) continue;
+          if (buildingOwner[i] !== e) continue;
+          if (buildingId[i] === BuildingType.HOUSE) {
+            cap += buildingLevel[i] * 10;
+          }
+        }
+        popCapacity[e] = cap;
+      }
+    }
+    
+    // Main update
+    function update(dt) {
+      tick++;
+      time += dt;
+      
+      buildingUpgradeSystem(dt);
+      productionSystem(dt);
+      upkeepSystem();
+      updatePopulationCapacity();
+      populationSystem();
+    }
+    
+    // Rendering
+    const stateColors = {
+      [BuildingState.IDLE]: '#4a4',
+      [BuildingState.PRODUCING]: '#4f4',
+      [BuildingState.BUILDING]: '#ff4',
+      [BuildingState.UPGRADING]: '#f84',
+      [BuildingState.DAMAGED]: '#f44',
+    };
+    
+    function render() {
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+      
+      // Grid
+      ctx.strokeStyle = '#222';
+      ctx.lineWidth = 1;
+      const gridSize = 50;
+      for (let x = 0; x < canvasWidth; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvasHeight);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvasHeight; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvasWidth, y);
+        ctx.stroke();
+      }
+      
+      // Buildings
+      for (let e = 1; e < entityCount; e++) {
+        if (!alive[e] || buildingId[e] === 0) continue;
+        
+        const x = buildingPosX[e] % canvasWidth;
+        const y = buildingPosY[e] % canvasHeight;
+        const state = buildingState[e];
+        const progress = buildingProgress[e];
+        
+        // Building rect
+        const size = 24;
+        ctx.fillStyle = stateColors[state] || '#888';
+        ctx.fillRect(x - size/2, y - size/2, size, size);
+        
+        // Progress bar for building/upgrading
+        if (state === BuildingState.BUILDING || state === BuildingState.UPGRADING) {
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(x - size/2, y - size/2 - 6, size * progress, 4);
+        }
+        
+        // Type indicator
+        ctx.fillStyle = '#000';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const typeChar = ['', 'W', 'S', 'G', 'H'][buildingId[e]];
+        ctx.fillText(typeChar, x, y);
+        
+        // Level
+        if (buildingLevel[e] > 1) {
+          ctx.fillStyle = '#ff0';
+          ctx.font = '8px monospace';
+          ctx.fillText('L' + buildingLevel[e], x, y + 14);
+        }
+      }
+      
+      // Player indicator
+      ctx.fillStyle = '#0ff';
+      ctx.beginPath();
+      ctx.arc(canvasWidth/2, canvasHeight/2, 8, 0, Math.PI*2);
+      ctx.fill();
+    }
+    
+    // HUD update
+    let lastFpsUpdate = 0;
+    let frameCount = 0;
+    let fps = 0;
+    let lastSimTime = 0;
+    
+    function updateHUD() {
+      const now = performance.now();
+      frameCount++;
+      if (now - lastFpsUpdate >= 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        lastFpsUpdate = now;
+      }
+      
+      // Count buildings
+      let buildings = 0, producing = 0;
+      for (let e = 1; e < entityCount; e++) {
+        if (!alive[e] || buildingId[e] === 0) continue;
+        buildings++;
+        if (buildingState[e] === BuildingState.PRODUCING) producing++;
+      }
+      
+      document.getElementById('fps').textContent = fps;
+      document.getElementById('fps').className = 'hud-value' + (fps < 55 ? ' warning' : '') + (fps < 30 ? ' danger' : '');
+      document.getElementById('tick').textContent = tick;
+      document.getElementById('entities').textContent = entityCount;
+      document.getElementById('alive').textContent = aliveCount;
+      document.getElementById('simTime').textContent = lastSimTime.toFixed(2) + 'ms';
+      document.getElementById('buildings').textContent = buildings;
+      document.getElementById('producing').textContent = producing;
+      document.getElementById('gold').textContent = Math.floor(storageGold[playerId]).toLocaleString();
+      document.getElementById('pop').textContent = popPopulation[playerId] + '/' + popCapacity[playerId];
+    }
+    
+    // Game loop
+    let running = true;
+    let timeScale = 1;
+    let lastTime = performance.now();
+    const TICK_DURATION = 5000; // 5 seconds per tick
+    let accumulator = 0;
+    
+    function gameLoop(now) {
+      if (!running) {
+        requestAnimationFrame(gameLoop);
+        return;
+      }
+      
+      const frameDt = (now - lastTime) * timeScale;
+      lastTime = now;
+      
+      accumulator += frameDt;
+      
+      // Fixed timestep
+      while (accumulator >= TICK_DURATION) {
+        const simStart = performance.now();
+        update(TICK_DURATION);
+        lastSimTime = performance.now() - simStart;
+        accumulator -= TICK_DURATION;
+      }
+      
+      render();
+      updateHUD();
+      
+      requestAnimationFrame(gameLoop);
+    }
+    
+    // Controls
+    document.getElementById('btn-pause').addEventListener('click', function() {
+      running = !running;
+      this.textContent = running ? 'Pause' : 'Resume';
+      this.classList.toggle('active', !running);
+    });
+    
+    document.getElementById('btn-step').addEventListener('click', function() {
+      if (!running) {
+        const simStart = performance.now();
+        update(TICK_DURATION);
+        lastSimTime = performance.now() - simStart;
+        render();
+        updateHUD();
+      }
+    });
+    
+    function spawnBuildings(count) {
+      for (let i = 0; i < count; i++) {
+        const types = [BuildingType.WOODCUTTER, BuildingType.STONE_MINE, BuildingType.GENERATOR, BuildingType.HOUSE];
+        const type = types[Math.floor(Math.random() * types.length)];
+        const x = Math.random() * canvasWidth;
+        const y = Math.random() * canvasHeight;
+        createBuilding(type, x, y);
+      }
+    }
+    
+    document.getElementById('btn-spawn100').addEventListener('click', () => spawnBuildings(100));
+    document.getElementById('btn-spawn1k').addEventListener('click', () => spawnBuildings(1000));
+    document.getElementById('btn-spawn10k').addEventListener('click', () => spawnBuildings(10000));
+    
+    document.getElementById('btn-clear').addEventListener('click', function() {
+      for (let e = 1; e < entityCount; e++) {
+        if (alive[e]) destroyEntity(e);
+      }
+    });
+    
+    const speedInput = document.getElementById('speed');
+    const speedVal = document.getElementById('speedVal');
+    speedInput.addEventListener('input', function() {
+      timeScale = parseFloat(this.value);
+      speedVal.textContent = timeScale.toFixed(1) + 'x';
+    });
+    
+    // Start
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+{
+  "name": "@sim/design-tokens",
+  "version": "0.1.0",
+  "description": "Design tokens for Simulation Game Web UI - color, spacing, typography, motion, z-index, radius. Generated via Style Dictionary v4.",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "style-dictionary build",
+    "build:css": "style-dictionary build -o css",
+    "build:ts": "style-dictionary build -o ts",
+    "build:js": "style-dictionary build -o js",
+    "watch": "style-dictionary watch",
+    "lint": "style-dictionary lint"
+  },
+  "keywords": [
+    "design-tokens",
+    "style-dictionary",
+    "ui",
+    "tokens",
+    "design-system"
+  ],
+  "author": "Simulation Game Team",
+  "license": "MIT",
+  "dependencies": {
+    "style-dictionary": "^4.1.0"
+  },
+  "devDependencies": {
+    "style-dictionary": "^4.1.0"
+  }
+}

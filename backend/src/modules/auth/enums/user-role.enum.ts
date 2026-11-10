@@ -1,0 +1,22 @@
+export enum UserRole {
+  PLAYER = 'PLAYER',
+  MODERATOR = 'MODERATOR',
+  ADMIN = 'ADMIN',
+  DEVELOPER = 'DEVELOPER',
+}
+
+export enum AuthProvider {
+  LOCAL = 'LOCAL',
+  GOOGLE = 'GOOGLE',
+  APPLE = 'APPLE',
+  STEAM = 'STEAM',
+  DISCORD = 'DISCORD',
+}
+
+export enum TokenType {
+  ACCESS = 'ACCESS',
+  REFRESH = 'REFRESH',
+  EMAIL_VERIFICATION = 'EMAIL_VERIFICATION',
+  PASSWORD_RESET = 'PASSWORD_RESET',
+  TWO_FA = 'TWO_FA',
+}
