@@ -6,14 +6,16 @@ import { TrafficManager } from './trafficManager';
  *
  * Coordinate layout (matches `qualityDemo.ts` scenery):
  *   - Runway 36L/18R .......... x = 0,     z = -1150 .. +1150
- *   - Parallel taxiway Alpha .. x = 45
+ *   - Four runway exits ....... z = -600, -300, +300, +600
+ *   - Parallel taxiway Alpha .. x = 40,    z = -1100 .. +1100
  *   - Apron taxilane Bravo .... x = 95
- *   - Gate stands ............. x = 130,   z = -180, -100, -20, 60, 150, 240, 330, 420
+ *   - Gate stands 1-8 ......... x = 130,   z = -180, -100, -20, 60, 150, 240, 330, 420
  *                               (gates 1 and 4 accept wide-body aircraft)
+ *   - Remote stands 12-13 ..... x = 130,   z = -500, -420 (south apron)
  *   - Cargo stands 9-11 ....... x = 130,   z = 560, 640, 720
- *   - Service lane Sierra ..... x = 160,   z = -190 .. 700
- *   - Fuel farm ............... (60, 100)
- *   - Baggage / catering depot  (160, -230)
+ *   - Service lane Sierra ..... x = 160,   z = -540 .. 860
+ *   - Fuel farm ............... (190, 860)
+ *   - Baggage / catering depot  (186, -230)
  *
  * Two disjoint sub-graphs are built: aircraft (runway/taxiway/apron/gate) and
  * vehicles (service/depot). They share no edge, which is exactly the
@@ -40,102 +42,159 @@ export const AIRPORT_LAYOUT = {
   runwayX: 0,
   runwayThresholdZ: -1150,
   runwayEndZ: 1150,
-  taxiwayX: 45,
+  /** Centre of the parallel taxiway Alpha (asphalt strip is 26 m wide). */
+  taxiwayX: 40,
+  /** Centre of the apron taxilane Bravo. */
   taxilaneX: 95,
   gateX: 130,
   leadX: 110,
   serviceLaneX: 160,
+  /** Z of the four asphalt exit taxiways joining the runway to Alpha. */
+  runwayExitZ: [-600, -300, 300, 600] as number[],
+  /** Z of the apron cross taxilanes joining Alpha to Bravo. */
+  crossTaxilaneZ: [-500, -300, 100, 600] as number[],
   /** Passenger gates 1..8 (gates 1 and 4 accept wide-bodies). */
   gateZ: [-180, -100, -20, 60, 150, 240, 330, 420] as number[],
+  /** Remote stands 12..13 on the extended south apron. */
+  remoteGateZ: [-500, -420] as number[],
   /** Cargo stands 9..11 on the northern cargo ramp. */
   cargoZ: [560, 640, 720] as number[],
-  fuelFarm: new THREE.Vector3(60, 0, 100),
-  baggageDepot: new THREE.Vector3(160, 0, -230)
+  fuelFarm: new THREE.Vector3(190, 0, 860),
+  baggageDepot: new THREE.Vector3(186, 0, -230)
 };
+
+interface StandDefinition {
+  gateId: number;
+  z: number;
+  kind: 'gate' | 'remote' | 'cargo';
+}
 
 export function buildAirportGroundNetwork(tm: TrafficManager): GroundNetwork {
   const V = (x: number, z: number) => new THREE.Vector3(x, 0, z);
   const link = (a: number, b: number) => tm.link(a, b);
 
+  const {
+    runwayX,
+    runwayThresholdZ,
+    runwayEndZ,
+    taxiwayX,
+    taxilaneX,
+    gateX,
+    leadX,
+    serviceLaneX,
+    runwayExitZ,
+    crossTaxilaneZ,
+    gateZ,
+    remoteGateZ,
+    cargoZ,
+    fuelFarm,
+    baggageDepot
+  } = AIRPORT_LAYOUT;
+
   /* ---------------------------- aircraft ---------------------------- */
 
-  // Runway 36L/18R
-  const r0 = tm.addNode(V(0, -1150), [], 'runway', undefined, { label: 'RWY36', maxSpeed: 90 });
-  const r1 = tm.addNode(V(0, -600), [], 'runway', undefined, { label: 'RWY36-MID', maxSpeed: 90 });
-  const r2 = tm.addNode(V(0, -300), [], 'runway', undefined, { label: 'RWY-EXIT-S', maxSpeed: 40 });
-  const r3 = tm.addNode(V(0, 300), [], 'runway', undefined, { label: 'RWY-EXIT-N', maxSpeed: 40 });
-  const r4 = tm.addNode(V(0, 1150), [], 'runway', undefined, { label: 'RWY18' });
-  link(r0, r1); link(r1, r2); link(r2, r3); link(r3, r4);
+  // Runway 36L/18R with four exit nodes.
+  const runwayZ = [runwayThresholdZ, ...runwayExitZ, runwayEndZ];
+  const runwayNodes = runwayZ.map((z, i) => {
+    const isEnd = i === 0 || i === runwayZ.length - 1;
+    const label = i === 0 ? 'RWY36' : i === runwayZ.length - 1 ? 'RWY18' : `RWY-EXIT-${i}`;
+    return tm.addNode(V(runwayX, z), [], 'runway', undefined, {
+      label,
+      maxSpeed: isEnd ? 90 : 40
+    });
+  });
+  const runwayNodeForZ = new Map<number, number>();
+  runwayZ.forEach((z, i) => runwayNodeForZ.set(z, runwayNodes[i]));
+  for (let i = 0; i < runwayNodes.length - 1; i++) link(runwayNodes[i], runwayNodes[i + 1]);
 
-  // Holding points just outside the runway
-  const h1 = tm.addNode(V(25, -330), [], 'holding', undefined, { label: 'HOLD-S' });
-  const h2 = tm.addNode(V(25, 330), [], 'holding', undefined, { label: 'HOLD-N' });
-  link(r2, h1);
-  link(r3, h2);
+  // Parallel taxiway Alpha. The union of exit and cross-taxilane Z values
+  // gives the nodes where the runway exits and apron entrances branch off.
+  const alphaZ = Array.from(
+    new Set([-1100, 1100, ...runwayExitZ, ...crossTaxilaneZ])
+  ).sort((a, b) => a - b);
+  const alphaByZ = new Map<number, number>();
+  const alphaNodes = alphaZ.map((z, i) => {
+    const node = tm.addNode(V(taxiwayX, z), [], 'taxiway', undefined, { label: `A${i + 1}` });
+    alphaByZ.set(z, node);
+    return node;
+  });
+  for (let i = 0; i < alphaNodes.length - 1; i++) link(alphaNodes[i], alphaNodes[i + 1]);
 
-  // Parallel taxiway Alpha
-  const a1 = tm.addNode(V(45, -600), [], 'taxiway', undefined, { label: 'A1' });
-  const a2 = tm.addNode(V(45, -300), [], 'taxiway', undefined, { label: 'A2' });
-  const a3 = tm.addNode(V(45, -100), [], 'taxiway', undefined, { label: 'A3' });
-  const a4 = tm.addNode(V(45, 100), [], 'taxiway', undefined, { label: 'A4' });
-  const a5 = tm.addNode(V(45, 300), [], 'taxiway', undefined, { label: 'A5' });
-  const a6 = tm.addNode(V(45, 600), [], 'taxiway', undefined, { label: 'A6' });
-  const a7 = tm.addNode(V(45, 1100), [], 'taxiway', undefined, { label: 'A7' });
-  link(a1, a2); link(a2, a3); link(a3, a4); link(a4, a5); link(a5, a6); link(a6, a7);
-  link(a1, r1);
-  link(h1, a2);
-  link(h2, a5);
-  link(a7, r4);
-
-  // Apron taxilane Bravo. The spine runs past all passenger gates and then
-  // north into the cargo ramp.
-  const gateZ = AIRPORT_LAYOUT.gateZ;
-  const cargoZ = AIRPORT_LAYOUT.cargoZ;
-  const leadZ = [...gateZ, ...cargoZ];
-  const bravoZ = [...gateZ, 520, ...cargoZ];
-  const bravo = bravoZ.map((z, i) =>
-    tm.addNode(V(AIRPORT_LAYOUT.taxilaneX, z), [], 'apron', undefined, { label: `B${i}` })
-  );
-  for (let i = 0; i < bravo.length - 1; i++) link(bravo[i], bravo[i + 1]);
-  link(a3, bravo[1]);
-  link(a4, bravo[3]);
-  link(a6, bravo[bravoZ.indexOf(cargoZ[0])]);
-
-  // Gate lead-in nodes (pushback axis) for passenger + cargo stands.
-  const leads = leadZ.map((z, i) =>
-    tm.addNode(V(AIRPORT_LAYOUT.leadX, z), [], 'apron', i + 1, { label: `LEAD${i + 1}` })
-  );
-  // Link Bravo to gate lead-ins. Index match is: gateZ[n] -> leads[n].
-  // The first 4 leads connect to Bravo nodes directly after a3 and a4.
-  leads.forEach((lead, i) => {
-    if (i < 4) {
-      link(bravo[i + 1], lead);
-    } else if (i < 8) {
-      link(bravo[i + 2], lead);
-    } else {
-      // Cargo leads connect at bravo[bravoZ.indexOf(520)] onwards.
-      const bz = bravoZ.indexOf(520) + (i - 8);
-      if (bz >= 0 && bz < bravo.length) link(bravo[bz], lead);
-    }
+  // Runway exits: runway -> holding point -> Alpha. The holding node sits
+  // between the runway edge and the taxiway, exactly where the hold-short
+  // bars are painted.
+  runwayExitZ.forEach((z, i) => {
+    const rwy = runwayNodeForZ.get(z);
+    const alpha = alphaByZ.get(z);
+    if (rwy === undefined || alpha === undefined) return;
+    const hold = tm.addNode(V(26, z), [], 'holding', undefined, { label: `HOLD-${i + 1}` });
+    link(rwy, hold);
+    link(hold, alpha);
   });
 
-  /** Gate stands (nose towards +X / terminal). Gates 1-8 are passenger, 9-11 are cargo. */
-  const passengerGates = gateZ.map((z, i) =>
-    tm.addNode(V(AIRPORT_LAYOUT.gateX, z), [], 'gate', i + 1, { label: `GATE${i + 1}` })
+  // Taxiway ends connect back to the runway at both thresholds.
+  link(alphaByZ.get(-1100)!, runwayNodes[0]);
+  link(alphaByZ.get(1100)!, runwayNodes[runwayNodes.length - 1]);
+
+  // Apron taxilane Bravo: spine from the south remote stands to the cargo
+  // ramp, with extra nodes where the cross taxilanes meet it.
+  const bravoZ = Array.from(
+    new Set([-560, 780, ...remoteGateZ, ...gateZ, ...cargoZ, ...crossTaxilaneZ])
+  ).sort((a, b) => a - b);
+  const bravoByZ = new Map<number, number>();
+  const bravoNodes = bravoZ.map((z, i) => {
+    const node = tm.addNode(V(taxilaneX, z), [], 'apron', undefined, { label: `B${i + 1}` });
+    bravoByZ.set(z, node);
+    return node;
+  });
+  for (let i = 0; i < bravoNodes.length - 1; i++) link(bravoNodes[i], bravoNodes[i + 1]);
+
+  // Cross taxilanes: Alpha -> Bravo. These are the visible entrance lanes
+  // into the apron.
+  for (const z of crossTaxilaneZ) {
+    const alpha = alphaByZ.get(z);
+    const bravo = bravoByZ.get(z);
+    if (alpha !== undefined && bravo !== undefined) link(alpha, bravo);
+  }
+
+  // Stands. Passenger gates keep the 1-8 ids, remote stands are 12-13 and
+  // the cargo ramp keeps 9-11. Order matters for pickFreeGate: airliners
+  // fill the terminal gates first, then the remote stands, then cargo.
+  const stands: StandDefinition[] = [
+    ...gateZ.map((z, i) => ({ gateId: i + 1, z, kind: 'gate' as const })),
+    ...remoteGateZ.map((z, i) => ({ gateId: 12 + i, z, kind: 'remote' as const })),
+    ...cargoZ.map((z, i) => ({ gateId: 9 + i, z, kind: 'cargo' as const }))
+  ];
+
+  const leads = stands.map((stand) =>
+    tm.addNode(V(leadX, stand.z), [], 'apron', stand.gateId, { label: `LEAD-${stand.gateId}` })
   );
-  const cargoGates = cargoZ.map((z, i) =>
-    tm.addNode(V(AIRPORT_LAYOUT.gateX, z), [], 'gate', i + 9, { label: `CARGO${i + 9}` })
-  );
-  const allGates = [...passengerGates, ...cargoGates];
-  leads.forEach((lead, i) => link(lead, allGates[i]));
+  const gateNodes = stands.map((stand) => {
+    const label =
+      stand.kind === 'gate'
+        ? `GATE${stand.gateId}`
+        : stand.kind === 'remote'
+          ? `REMOTE${stand.gateId}`
+          : `CARGO${stand.gateId}`;
+    return tm.addNode(V(gateX, stand.z), [], 'gate', stand.gateId, { label });
+  });
+
+  stands.forEach((stand, i) => {
+    const bravo = bravoByZ.get(stand.z);
+    if (bravo !== undefined) link(bravo, leads[i]);
+    link(leads[i], gateNodes[i]);
+  });
 
   /* ----------------------------- vehicles ---------------------------- */
 
   // Service lane Sierra (runs behind the gate stands, in front of terminal).
-  // It is extended north to serve the cargo ramp.
-  const serviceZ = [-190, -140, -100, -60, -20, 20, 60, 150, 240, 330, 420, 520, 600, 700];
+  // It now reaches both the extended south apron and the relocated fuel farm.
+  const serviceZ = [
+    -540, -500, -460, -420, -380, -230, -190, -180, -140, -100, -60, -20,
+    20, 60, 150, 240, 330, 420, 520, 560, 600, 640, 700, 720, 780, 860
+  ];
   const serviceNodes = serviceZ.map((z, i) =>
-    tm.addNode(V(AIRPORT_LAYOUT.serviceLaneX, z), [], 'service', undefined, { label: `S${i + 1}` })
+    tm.addNode(V(serviceLaneX, z), [], 'service', undefined, { label: `S${i + 1}` })
   );
   for (let i = 0; i < serviceNodes.length - 1; i++) link(serviceNodes[i], serviceNodes[i + 1]);
 
@@ -152,40 +211,43 @@ export function buildAirportGroundNetwork(tm: TrafficManager): GroundNetwork {
     return bestIndex;
   };
 
-  // Two service spots per stand, one at each side of the aircraft.
-  const serviceSpots: number[][] = leadZ.map((z, i) => {
-    const a = tm.addNode(V(126, z - 13), [], 'service', i + 1, { label: `SVC${i + 1}A` });
-    const b = tm.addNode(V(126, z + 13), [], 'service', i + 1, { label: `SVC${i + 1}B` });
-    const lane = serviceNodes[nearestService(z)];
+  // Two service spots per stand, one at each side of the aircraft. The
+  // gateId is the real stand id (not the array index), so vehicles dispatched
+  // to gate 12 or 13 find their own spots.
+  const serviceSpots: number[][] = stands.map((stand) => {
+    const a = tm.addNode(V(126, stand.z - 13), [], 'service', stand.gateId, {
+      label: `SVC${stand.gateId}A`
+    });
+    const b = tm.addNode(V(126, stand.z + 13), [], 'service', stand.gateId, {
+      label: `SVC${stand.gateId}B`
+    });
+    const lane = serviceNodes[nearestService(stand.z)];
     link(a, lane);
     link(b, lane);
     return [a, b];
   });
 
-  // Fuel farm road (west of the apron) + depot node
-  const f0 = tm.addNode(V(60, 100), [], 'depot', undefined, { label: 'fuel' });
-  const f1 = tm.addNode(V(60, 130), [], 'service', undefined, { label: 'F1' });
-  const f2 = tm.addNode(V(100, 130), [], 'service', undefined, { label: 'F2' });
-  const f3 = tm.addNode(V(140, 130), [], 'service', undefined, { label: 'F3' });
-  link(f0, f1); link(f1, f2); link(f2, f3);
-  link(f3, serviceNodes[nearestService(60)]);
+  // Fuel farm at the north end of the service lane.
+  const fuelDepot = tm.addNode(V(fuelFarm.x, fuelFarm.z), [], 'depot', undefined, { label: 'fuel' });
+  link(fuelDepot, serviceNodes[nearestService(fuelFarm.z)]);
 
-  // Baggage + catering depot behind the south end of the service lane
-  const d0 = tm.addNode(V(160, -230), [], 'depot', undefined, { label: 'baggage' });
-  const d1 = tm.addNode(V(160, -210), [], 'service', undefined, { label: 'D1' });
-  link(d0, d1); link(d1, serviceNodes[0]);
+  // Baggage + catering depot behind the south end of the apron.
+  const baggageDepotNode = tm.addNode(V(baggageDepot.x, baggageDepot.z), [], 'depot', undefined, {
+    label: 'baggage'
+  });
+  link(baggageDepotNode, serviceNodes[nearestService(baggageDepot.z)]);
 
   return {
-    gates: allGates.map((gateNode, i) => ({
-      gateId: i + 1,
-      gateNode,
+    gates: stands.map((stand, i) => ({
+      gateId: stand.gateId,
+      gateNode: gateNodes[i],
       leadNode: leads[i],
       serviceSpots: serviceSpots[i]
     })),
-    fuelDepot: f0,
-    baggageDepot: d0,
-    runwayThreshold: r0,
-    runwayEnd: r4,
+    fuelDepot,
+    baggageDepot: baggageDepotNode,
+    runwayThreshold: runwayNodes[0],
+    runwayEnd: runwayNodes[runwayNodes.length - 1],
     layout: AIRPORT_LAYOUT
   };
 }

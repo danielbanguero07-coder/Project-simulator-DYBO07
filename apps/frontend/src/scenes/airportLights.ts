@@ -174,16 +174,35 @@ export function createRunwayLights(options: RunwayLightOptions = {}): RunwayLigh
   return { group, papi };
 }
 
-/** Taxiway centrelines + holding-position crosses. */
-export function createTaxiwayLights(startGateZ: number[], laneWidth = 20): THREE.Group {
+export interface TaxiwayLightOptions {
+  /** Centre X of the parallel taxiway Alpha. */
+  alphaX?: number;
+  /** Centre X of the apron taxilane Bravo. */
+  taxilaneX?: number;
+  /** Usable width of the taxilane around each stand. */
+  laneWidth?: number;
+  /** Z of the cross taxilanes joining Alpha to Bravo. */
+  crossZ?: number[];
+}
+
+/** Taxiway centrelines, edge lights and stand lead-in lighting. */
+export function createTaxiwayLights(
+  startGateZ: number[],
+  options: TaxiwayLightOptions = {}
+): THREE.Group {
   const group = new THREE.Group();
   group.name = 'taxiwayLights';
 
-  // Blue centreline dashes along Alpha (x = 45), from the south exit to the
-  // north holding point.
+  const alphaX = options.alphaX ?? 40;
+  const taxilaneX = options.taxilaneX ?? 95;
+  const laneWidth = options.laneWidth ?? 20;
+  const crossZ = options.crossZ ?? [];
+
+  // Blue centreline dashes along Alpha, from the south threshold to the
+  // north threshold.
   const dashPositions: THREE.Vector3[] = [];
-  for (let z = -600; z <= 1100; z += 8) {
-    dashPositions.push(new THREE.Vector3(45, 0.07, z));
+  for (let z = -1100; z <= 1100; z += 8) {
+    dashPositions.push(new THREE.Vector3(alphaX, 0.07, z));
   }
   const dashGeometry = new THREE.BoxGeometry(0.28, 0.08, 4.2);
   const dashMaterial = lampMaterial(LIGHT_COLORS.taxiwayBlue);
@@ -198,14 +217,34 @@ export function createTaxiwayLights(startGateZ: number[], laneWidth = 20): THREE
   dashes.frustumCulled = false;
   group.add(dashes);
 
+  // Blue edge lights along both sides of Alpha.
+  const alphaEdgePositions: THREE.Vector3[] = [];
+  for (let z = -1100; z <= 1100; z += 50) {
+    alphaEdgePositions.push(new THREE.Vector3(alphaX - 12, 0.08, z));
+    alphaEdgePositions.push(new THREE.Vector3(alphaX + 12, 0.08, z));
+  }
+  group.add(buildLampRow(alphaEdgePositions, LIGHT_COLORS.taxiwayEdge, 0.26));
+
   // Blue edge lights around each stand lead-in.
   const standPositions: THREE.Vector3[] = [];
   for (const gz of startGateZ) {
     for (let dx = -laneWidth / 2 + 3; dx < laneWidth / 2 - 3; dx += 6) {
-      standPositions.push(new THREE.Vector3(95 + dx, 0.08, gz));
+      standPositions.push(new THREE.Vector3(taxilaneX + dx, 0.08, gz));
     }
   }
   group.add(buildLampRow(standPositions, LIGHT_COLORS.taxiwayEdge, 0.28));
+
+  // Blue edge lights along the apron cross taxilanes.
+  const crossPositions: THREE.Vector3[] = [];
+  for (const cz of crossZ) {
+    for (let x = alphaX + laneWidth / 2; x <= taxilaneX; x += 8) {
+      crossPositions.push(new THREE.Vector3(x, 0.08, cz - 8));
+      crossPositions.push(new THREE.Vector3(x, 0.08, cz + 8));
+    }
+  }
+  if (crossPositions.length > 0) {
+    group.add(buildLampRow(crossPositions, LIGHT_COLORS.taxiwayEdge, 0.26));
+  }
 
   return group;
 }

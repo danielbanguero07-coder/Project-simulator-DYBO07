@@ -361,28 +361,48 @@ export function createQualityDemo(
   runway.receiveShadow = true;
   scene.add(runway);
 
-  // Taxiway from runway to apron
-  const taxiway = new THREE.Mesh(new THREE.PlaneGeometry(150, 24), asphaltMat);
-  taxiway.rotation.x = -Math.PI / 2;
-  taxiway.position.set(62, 0.05, -60);
-  taxiway.receiveShadow = true;
-  scene.add(taxiway);
+  // Parallel taxiway Alpha: asphalt strip beside the runway, from threshold
+  // to threshold.
+  const alphaTaxiway = new THREE.Mesh(new THREE.PlaneGeometry(26, 2200), asphaltMat);
+  alphaTaxiway.rotation.x = -Math.PI / 2;
+  alphaTaxiway.position.set(AIRPORT_LAYOUT.taxiwayX, 0.062, 0);
+  alphaTaxiway.receiveShadow = true;
+  scene.add(alphaTaxiway);
 
-  // Apron (concrete) — extended north to cover the new gates and cargo ramp.
-  const apron = new THREE.Mesh(new THREE.PlaneGeometry(300, 1080), concreteMat);
+  // Four runway exits joining the runway edge to Alpha.
+  AIRPORT_LAYOUT.runwayExitZ.forEach((z) => {
+    const exit = new THREE.Mesh(new THREE.PlaneGeometry(40, 26), asphaltMat);
+    exit.rotation.x = -Math.PI / 2;
+    exit.position.set(33, 0.066, z);
+    exit.receiveShadow = true;
+    scene.add(exit);
+  });
+
+  // Apron (concrete): starts east of Alpha and reaches the new south remote
+  // stands. The extended north end covers the cargo ramp.
+  const apron = new THREE.Mesh(new THREE.PlaneGeometry(284, 1325), concreteMat);
   apron.rotation.x = -Math.PI / 2;
-  apron.position.set(185, 0.04, 225);
+  apron.position.set(195, 0.04, 102.5);
   apron.receiveShadow = true;
   scene.add(apron);
+
+  // Cross taxilanes: asphalt entrance lanes from Alpha into the apron.
+  AIRPORT_LAYOUT.crossTaxilaneZ.forEach((z) => {
+    const lane = new THREE.Mesh(new THREE.PlaneGeometry(54, 20), asphaltMat);
+    lane.rotation.x = -Math.PI / 2;
+    lane.position.set(68, 0.07, z);
+    lane.receiveShadow = true;
+    scene.add(lane);
+  });
 
   // Cargo ramp marking: a darker concrete band separates it from the
   // passenger apron visually.
   const cargoRamp = new THREE.Mesh(
-    new THREE.PlaneGeometry(260, 300),
+    new THREE.PlaneGeometry(250, 300),
     new THREE.MeshStandardMaterial({ color: 0x8f949a, roughness: 0.95, metalness: 0.03 })
   );
   cargoRamp.rotation.x = -Math.PI / 2;
-  cargoRamp.position.set(190, 0.045, 640);
+  cargoRamp.position.set(197, 0.045, 640);
   cargoRamp.receiveShadow = true;
   scene.add(cargoRamp);
 
@@ -404,6 +424,46 @@ export function createQualityDemo(
     bar2.position.z = 1235;
     scene.add(bar2);
   }
+
+  // ===== TAXIWAY PAINT =====
+  // Yellow centreline dashes along Alpha, Bravo, the cross taxilanes and
+  // the runway exits; plus hold-short bars at every runway entrance.
+  const taxiPaint = new THREE.MeshStandardMaterial({ color: 0xe8bc26, roughness: 0.6 });
+  const taxiDashGeometry = new THREE.BoxGeometry(0.7, 0.02, 10);
+  const dashTransforms: { x: number; z: number; rot: number }[] = [];
+  for (let z = -1100; z <= 1100; z += 22) {
+    dashTransforms.push({ x: AIRPORT_LAYOUT.taxiwayX, z, rot: 0 });
+  }
+  for (let z = -560; z <= 780; z += 22) {
+    dashTransforms.push({ x: AIRPORT_LAYOUT.taxilaneX, z, rot: 0 });
+  }
+  AIRPORT_LAYOUT.crossTaxilaneZ.forEach((z) => {
+    for (let x = 45; x <= 92; x += 12) dashTransforms.push({ x, z, rot: Math.PI / 2 });
+  });
+  AIRPORT_LAYOUT.runwayExitZ.forEach((z) => {
+    for (let x = 25; x <= 38; x += 8) dashTransforms.push({ x, z, rot: Math.PI / 2 });
+  });
+
+  const taxiDashes = new THREE.InstancedMesh(taxiDashGeometry, taxiPaint, dashTransforms.length);
+  const paintDummy = new THREE.Object3D();
+  dashTransforms.forEach((t, i) => {
+    paintDummy.position.set(t.x, 0.1, t.z);
+    paintDummy.rotation.set(0, t.rot, 0);
+    paintDummy.updateMatrix();
+    taxiDashes.setMatrixAt(i, paintDummy.matrix);
+  });
+  taxiDashes.instanceMatrix.needsUpdate = true;
+  scene.add(taxiDashes);
+
+  // Hold-short bars at the taxiway side of every runway entrance.
+  const holdBarGeometry = new THREE.BoxGeometry(1.1, 0.02, 24);
+  AIRPORT_LAYOUT.runwayExitZ.forEach((z) => {
+    [31, 34].forEach((x) => {
+      const bar = new THREE.Mesh(holdBarGeometry, taxiPaint);
+      bar.position.set(x, 0.1, z);
+      scene.add(bar);
+    });
+  });
 
   // Runway lighting (edge + thresholds + PAPI) is built by `airportLights.ts`
   // below, after the rest of the airport geometry.
@@ -583,8 +643,8 @@ export function createQualityDemo(
   // Floodlight masts on the apron
   const mastMat = new THREE.MeshStandardMaterial({ color: 0x555c63, metalness: 0.6, roughness: 0.5 });
   const floodPositions = [
-    [70, -200], [70, 100], [70, 420], [70, 700],
-    [250, -200], [250, 100], [250, 420], [250, 700]
+    [70, -460], [70, -200], [70, 100], [70, 420], [70, 700],
+    [250, -460], [250, -200], [250, 100], [250, 420], [250, 700]
   ];
   floodPositions.forEach(([x, z]) => {
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.1, 26, 8), mastMat);
@@ -757,15 +817,15 @@ export function createQualityDemo(
     roughness: 0.95,
     metalness: 0.02
   });
-  const serviceLane = new THREE.Mesh(new THREE.PlaneGeometry(9, 940), serviceRoadMat);
+  const serviceLane = new THREE.Mesh(new THREE.PlaneGeometry(9, 1440), serviceRoadMat);
   serviceLane.rotation.x = -Math.PI / 2;
-  serviceLane.position.set(160, 0.05, 250);
+  serviceLane.position.set(160, 0.05, 160);
   serviceLane.receiveShadow = true;
   scene.add(serviceLane);
 
-  const fuelRoad = new THREE.Mesh(new THREE.PlaneGeometry(110, 8), serviceRoadMat);
+  const fuelRoad = new THREE.Mesh(new THREE.PlaneGeometry(40, 8), serviceRoadMat);
   fuelRoad.rotation.x = -Math.PI / 2;
-  fuelRoad.position.set(105, 0.05, 130);
+  fuelRoad.position.set(175, 0.05, 850);
   fuelRoad.receiveShadow = true;
   scene.add(fuelRoad);
 
@@ -778,18 +838,22 @@ export function createQualityDemo(
   // Gate lead-in lines (yellow)
   const standPaint = new THREE.MeshStandardMaterial({ color: 0xe0b21c, roughness: 0.6 });
   network.gates.forEach((gate) => {
-    const lead = trafficManager.getNode(gate.leadNode);
     const stand = trafficManager.getNode(gate.gateNode);
-    if (!lead || !stand) return;
-    const line = new THREE.Mesh(new THREE.PlaneGeometry(22, 0.8), standPaint);
+    if (!stand) return;
+    const fromX = AIRPORT_LAYOUT.taxilaneX;
+    const line = new THREE.Mesh(
+      new THREE.PlaneGeometry(stand.position.x - fromX + 2, 0.8),
+      standPaint
+    );
     line.rotation.x = -Math.PI / 2;
-    line.position.set((lead.position.x + stand.position.x) / 2, 0.1, stand.position.z);
+    line.position.set((fromX + stand.position.x) / 2, 0.1, stand.position.z);
     scene.add(line);
   });
 
-  // Fuel farm: two storage tanks + bund wall
+  // Fuel farm: two storage tanks + bund wall, at the north end of the
+  // service lane so the parallel taxiway stays clear.
   const tankMat = new THREE.MeshStandardMaterial({ color: 0xd9dee4, roughness: 0.35, metalness: 0.65 });
-  for (const [x, z] of [[42, 118], [66, 118]]) {
+  for (const [x, z] of [[176, 850], [204, 850]]) {
     const tank = new THREE.Mesh(new THREE.CylinderGeometry(7, 7, 8, 24), tankMat);
     tank.position.set(x, 4, z);
     tank.castShadow = true;
@@ -800,10 +864,10 @@ export function createQualityDemo(
     scene.add(cap);
   }
   const bund = new THREE.Mesh(
-    new THREE.BoxGeometry(42, 1.4, 22),
+    new THREE.BoxGeometry(46, 1.4, 24),
     new THREE.MeshStandardMaterial({ color: 0x8c9299, roughness: 0.9 })
   );
-  bund.position.set(54, 0.7, 118);
+  bund.position.set(190, 0.7, 850);
   scene.add(bund);
 
   // Baggage / catering depot building
@@ -828,7 +892,16 @@ export function createQualityDemo(
   setPapiGroup(runwayLighting.papi);
   scene.add(runwayLighting.group);
 
-  const taxiwayLights = createTaxiwayLights(AIRPORT_LAYOUT.gateZ);
+  const allStandZ = [
+    ...AIRPORT_LAYOUT.remoteGateZ,
+    ...AIRPORT_LAYOUT.gateZ,
+    ...AIRPORT_LAYOUT.cargoZ
+  ];
+  const taxiwayLights = createTaxiwayLights(allStandZ, {
+    alphaX: AIRPORT_LAYOUT.taxiwayX,
+    taxilaneX: AIRPORT_LAYOUT.taxilaneX,
+    crossZ: AIRPORT_LAYOUT.crossTaxilaneZ
+  });
   scene.add(taxiwayLights);
 
   const jetwayLights = createJetwayLights(AIRPORT_LAYOUT.gateZ);
