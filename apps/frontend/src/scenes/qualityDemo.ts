@@ -9,7 +9,7 @@ import { TextureStreamer, type TextureQualityCap } from './textureStreaming';
 import { WorldManager } from './worldManager';
 import { TrafficManager, type PathNode } from './trafficManager';
 import { buildAirportGroundNetwork, validateGroundNetwork, AIRPORT_LAYOUT } from './groundNetwork';
-import { createRunwayLights, createTaxiwayLights, createJetwayLights } from './airportLights';
+import { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights } from './airportLights';
 import { updateLighting, animateLights, setPapiGroup, registerEditableLight } from './lightController';
 import { ScheduleManager } from './scheduleManager';
 import { TimeManager } from './timeSystem';
@@ -381,6 +381,23 @@ export function createQualityDemo(
     scene.add(exit);
   });
 
+  // Runway-end taxiway connectors: wide asphalt bands joining each runway
+  // end to the Alpha threshold, so aircraft turn around on pavement instead
+  // of grass (the ground graph already links these two nodes).
+  for (const s of [1, -1]) {
+    const start = new THREE.Vector2(0, 1150 * s);
+    const end = new THREE.Vector2(72, 1100 * s);
+    const connectorLength = start.distanceTo(end) + 12;
+    const connector = new THREE.Mesh(
+      new THREE.BoxGeometry(connectorLength, 0.02, 34),
+      asphaltMat
+    );
+    connector.position.set((start.x + end.x) / 2, 0.064, (start.y + end.y) / 2);
+    connector.rotation.y = -Math.atan2(end.y - start.y, end.x - start.x);
+    connector.receiveShadow = true;
+    scene.add(connector);
+  }
+
   // Apron (concrete): starts at the east edge of Alpha and reaches the new
   // south remote stands. The extended north end covers the cargo ramp.
   const apron = new THREE.Mesh(new THREE.PlaneGeometry(247, 1325), concreteMat);
@@ -428,6 +445,35 @@ export function createQualityDemo(
     scene.add(bar2);
   }
 
+  // Aiming point: the big pair of bars 400 m from each threshold, distinct
+  // from the touchdown-zone bars (300 m).
+  for (const end of [750, -750]) {
+    for (const sx of [-1, 1]) {
+      const aiming = new THREE.Mesh(new THREE.PlaneGeometry(12, 50), paintMat);
+      aiming.rotation.x = -Math.PI / 2;
+      aiming.position.set(sx * 14, 0.09, end);
+      scene.add(aiming);
+    }
+  }
+
+  // Striped shoulders (blast pads) beside each runway end.
+  const shoulderGeometry = new THREE.PlaneGeometry(2.2, 140);
+  const shoulderPaint = new THREE.InstancedMesh(shoulderGeometry, paintMat, 16);
+  const shoulderDummy = new THREE.Object3D();
+  let shoulderIndex = 0;
+  for (const end of [1220, -1220]) {
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 4; i++) {
+        shoulderDummy.position.set(sx * (26 + i * 5), 0.088, end);
+        shoulderDummy.rotation.set(-Math.PI / 2, 0, 0);
+        shoulderDummy.updateMatrix();
+        shoulderPaint.setMatrixAt(shoulderIndex++, shoulderDummy.matrix);
+      }
+    }
+  }
+  shoulderPaint.instanceMatrix.needsUpdate = true;
+  scene.add(shoulderPaint);
+
   // ===== TAXIWAY PAINT =====
   // Yellow centreline dashes along Alpha, Bravo, the cross taxilanes and
   // the runway exits; plus hold-short bars at every runway entrance.
@@ -465,14 +511,38 @@ export function createQualityDemo(
   // rotated so they cross the wide high-speed exit perpendicularly.
   const holdBarGeometry = new THREE.BoxGeometry(1.1, 0.02, 32);
   const holdBarAngle = Math.atan2(exitDrop, exitRun);
+  const holdLightPositions: THREE.Vector3[] = [];
   AIRPORT_LAYOUT.runwayExitZ.forEach((z) => {
     [0.18, 0.28].forEach((t) => {
       const bar = new THREE.Mesh(holdBarGeometry, taxiPaint);
-      bar.position.set(20 + exitRun * t, 0.1, z - exitDrop * t);
+      const barX = 20 + exitRun * t;
+      const barZ = z - exitDrop * t;
+      bar.position.set(barX, 0.1, barZ);
       bar.rotation.y = holdBarAngle;
       scene.add(bar);
+      holdLightPositions.push(new THREE.Vector3(barX, 0.9, barZ));
     });
   });
+
+  // Runway holding position where each end connector meets the runway: a
+  // double yellow bar across the connector, with red holding lights.
+  const connectorBarGeometry = new THREE.BoxGeometry(1.1, 0.02, 34);
+  for (const s of [1, -1]) {
+    const start = new THREE.Vector2(0, 1150 * s);
+    const end = new THREE.Vector2(72, 1100 * s);
+    const dir = new THREE.Vector2(end.x - start.x, end.y - start.y).normalize();
+    const perp = new THREE.Vector2(50 * s, 72).normalize();
+    const barAngle = Math.atan2(perp.x, perp.y);
+    [0.34, 0.37].forEach((t) => {
+      const barX = start.x + dir.x * t * 87.66;
+      const barZ = start.y + dir.y * t * 87.66;
+      const bar = new THREE.Mesh(connectorBarGeometry, taxiPaint);
+      bar.position.set(barX, 0.1, barZ);
+      bar.rotation.y = barAngle;
+      scene.add(bar);
+      holdLightPositions.push(new THREE.Vector3(barX, 0.9, barZ));
+    });
+  }
 
   // Runway lighting (edge + thresholds + PAPI) is built by `airportLights.ts`
   // below, after the rest of the airport geometry.
@@ -916,6 +986,8 @@ export function createQualityDemo(
 
   const jetwayLights = createJetwayLights(AIRPORT_LAYOUT.gateZ);
   scene.add(jetwayLights);
+
+  scene.add(createHoldLights(holdLightPositions));
 
   scheduleManager.initSchedule();
   trafficManager.seedAmbientTraffic(8);

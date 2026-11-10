@@ -20,6 +20,8 @@ export const LIGHT_COLORS = {
   thresholdRed: 0xff2f2f,
   taxiwayBlue: 0x4a90e2,
   taxiwayEdge: 0x2f6fb0,
+  centerlineGreen: 0x2fd46a,
+  hold: 0xff3b30,
   jetway: 0xffe484,
   papiWhite: 0xf7f7f2,
   papiRed: 0xff2222
@@ -253,6 +255,14 @@ export function createTaxiwayLights(
   return group;
 }
 
+/** Red runway-holding-position lights (instanced emissive lamps). */
+export function createHoldLights(
+  positions: THREE.Vector3[],
+  radius = 0.5
+): THREE.InstancedMesh {
+  return buildLampRow(positions, LIGHT_COLORS.hold, radius);
+}
+
 /** Warm LED rings painted on the apron at each stand. */
 export function createJetwayLights(gateZ: number[] = [-180, -100, -20, 60]): THREE.Group {
   const group = new THREE.Group();
@@ -276,4 +286,4 @@ export function createJetwayLights(gateZ: number[] = [-180, -100, -20, 60]): THR
   return group;
 }
 
-export default { createRunwayLights, createTaxiwayLights, createJetwayLights };
+export default { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights };
