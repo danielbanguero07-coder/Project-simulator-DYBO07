@@ -361,36 +361,39 @@ export function createQualityDemo(
   runway.receiveShadow = true;
   scene.add(runway);
 
-  // Parallel taxiway Alpha: asphalt strip beside the runway, from threshold
-  // to threshold.
-  const alphaTaxiway = new THREE.Mesh(new THREE.PlaneGeometry(26, 2200), asphaltMat);
+  // Parallel taxiway Alpha: wide asphalt strip beside the runway, from
+  // threshold to threshold.
+  const alphaTaxiway = new THREE.Mesh(new THREE.PlaneGeometry(36, 2200), asphaltMat);
   alphaTaxiway.rotation.x = -Math.PI / 2;
   alphaTaxiway.position.set(AIRPORT_LAYOUT.taxiwayX, 0.062, 0);
   alphaTaxiway.receiveShadow = true;
   scene.add(alphaTaxiway);
 
-  // Four runway exits joining the runway edge to Alpha.
+  // Four long high-speed exits joining the runway edge to Alpha at 22 degrees.
+  const exitRun = 52;
+  const exitDrop = AIRPORT_LAYOUT.runwayExitDrop;
+  const exitLength = Math.hypot(exitRun, exitDrop);
   AIRPORT_LAYOUT.runwayExitZ.forEach((z) => {
-    const exit = new THREE.Mesh(new THREE.PlaneGeometry(40, 26), asphaltMat);
-    exit.rotation.x = -Math.PI / 2;
-    exit.position.set(33, 0.066, z);
+    const exit = new THREE.Mesh(new THREE.BoxGeometry(exitLength, 0.02, 34), asphaltMat);
+    exit.position.set(20 + exitRun / 2, 0.066, z - exitDrop / 2);
+    exit.rotation.y = Math.atan2(exitDrop, exitRun);
     exit.receiveShadow = true;
     scene.add(exit);
   });
 
-  // Apron (concrete): starts east of Alpha and reaches the new south remote
-  // stands. The extended north end covers the cargo ramp.
-  const apron = new THREE.Mesh(new THREE.PlaneGeometry(284, 1325), concreteMat);
+  // Apron (concrete): starts at the east edge of Alpha and reaches the new
+  // south remote stands. The extended north end covers the cargo ramp.
+  const apron = new THREE.Mesh(new THREE.PlaneGeometry(247, 1325), concreteMat);
   apron.rotation.x = -Math.PI / 2;
-  apron.position.set(195, 0.04, 102.5);
+  apron.position.set(213.5, 0.04, 102.5);
   apron.receiveShadow = true;
   scene.add(apron);
 
-  // Cross taxilanes: asphalt entrance lanes from Alpha into the apron.
+  // Cross taxilanes: wide asphalt entrance lanes from Alpha into the apron.
   AIRPORT_LAYOUT.crossTaxilaneZ.forEach((z) => {
-    const lane = new THREE.Mesh(new THREE.PlaneGeometry(54, 20), asphaltMat);
+    const lane = new THREE.Mesh(new THREE.PlaneGeometry(80, 34), asphaltMat);
     lane.rotation.x = -Math.PI / 2;
-    lane.position.set(68, 0.07, z);
+    lane.position.set(85, 0.07, z);
     lane.receiveShadow = true;
     scene.add(lane);
   });
@@ -398,11 +401,11 @@ export function createQualityDemo(
   // Cargo ramp marking: a darker concrete band separates it from the
   // passenger apron visually.
   const cargoRamp = new THREE.Mesh(
-    new THREE.PlaneGeometry(250, 300),
+    new THREE.PlaneGeometry(240, 300),
     new THREE.MeshStandardMaterial({ color: 0x8f949a, roughness: 0.95, metalness: 0.03 })
   );
   cargoRamp.rotation.x = -Math.PI / 2;
-  cargoRamp.position.set(197, 0.045, 640);
+  cargoRamp.position.set(210, 0.045, 640);
   cargoRamp.receiveShadow = true;
   scene.add(cargoRamp);
 
@@ -438,10 +441,13 @@ export function createQualityDemo(
     dashTransforms.push({ x: AIRPORT_LAYOUT.taxilaneX, z, rot: 0 });
   }
   AIRPORT_LAYOUT.crossTaxilaneZ.forEach((z) => {
-    for (let x = 45; x <= 92; x += 12) dashTransforms.push({ x, z, rot: Math.PI / 2 });
+    for (let x = 45; x <= 125; x += 14) dashTransforms.push({ x, z, rot: Math.PI / 2 });
   });
   AIRPORT_LAYOUT.runwayExitZ.forEach((z) => {
-    for (let x = 25; x <= 38; x += 8) dashTransforms.push({ x, z, rot: Math.PI / 2 });
+    const rot = Math.atan2(exitRun, -exitDrop);
+    for (let t = 0.12; t <= 0.92; t += 0.16) {
+      dashTransforms.push({ x: 20 + exitRun * t, z: z - exitDrop * t, rot });
+    }
   });
 
   const taxiDashes = new THREE.InstancedMesh(taxiDashGeometry, taxiPaint, dashTransforms.length);
@@ -455,12 +461,15 @@ export function createQualityDemo(
   taxiDashes.instanceMatrix.needsUpdate = true;
   scene.add(taxiDashes);
 
-  // Hold-short bars at the taxiway side of every runway entrance.
-  const holdBarGeometry = new THREE.BoxGeometry(1.1, 0.02, 24);
+  // Hold-short bars at the taxiway side of every runway entrance. They are
+  // rotated so they cross the wide high-speed exit perpendicularly.
+  const holdBarGeometry = new THREE.BoxGeometry(1.1, 0.02, 32);
+  const holdBarAngle = Math.atan2(exitDrop, exitRun);
   AIRPORT_LAYOUT.runwayExitZ.forEach((z) => {
-    [31, 34].forEach((x) => {
+    [0.18, 0.28].forEach((t) => {
       const bar = new THREE.Mesh(holdBarGeometry, taxiPaint);
-      bar.position.set(x, 0.1, z);
+      bar.position.set(20 + exitRun * t, 0.1, z - exitDrop * t);
+      bar.rotation.y = holdBarAngle;
       scene.add(bar);
     });
   });
@@ -643,7 +652,7 @@ export function createQualityDemo(
   // Floodlight masts on the apron
   const mastMat = new THREE.MeshStandardMaterial({ color: 0x555c63, metalness: 0.6, roughness: 0.5 });
   const floodPositions = [
-    [70, -460], [70, -200], [70, 100], [70, 420], [70, 700],
+    [40, -460], [40, -200], [40, 100], [40, 420], [40, 700],
     [250, -460], [250, -200], [250, 100], [250, 420], [250, 700]
   ];
   floodPositions.forEach(([x, z]) => {
@@ -899,6 +908,7 @@ export function createQualityDemo(
   ];
   const taxiwayLights = createTaxiwayLights(allStandZ, {
     alphaX: AIRPORT_LAYOUT.taxiwayX,
+    alphaWidth: 36,
     taxilaneX: AIRPORT_LAYOUT.taxilaneX,
     crossZ: AIRPORT_LAYOUT.crossTaxilaneZ
   });

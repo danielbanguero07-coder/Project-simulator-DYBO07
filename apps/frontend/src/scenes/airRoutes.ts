@@ -98,16 +98,29 @@ export interface RouteTrafficOptions {
 const SPEC_POOL = ['A320', 'B737', 'A321', 'A350', 'B787', 'A380'];
 
 /** Gate stands at the home hub, matching groundNetwork.ts (x = 130). */
-const HOME_GATE_Z = [-180, -100, -20, 60, 150, 240, 330, 420];
+const HOME_GATE_STANDS: { id: number; z: number }[] = [
+  { id: 1, z: -180 },
+  { id: 2, z: -100 },
+  { id: 3, z: -20 },
+  { id: 4, z: 60 },
+  { id: 5, z: 150 },
+  { id: 6, z: 240 },
+  { id: 7, z: 330 },
+  { id: 8, z: 420 },
+  { id: 12, z: -500 },
+  { id: 13, z: -420 }
+];
+const HOME_GATE_IDS = HOME_GATE_STANDS.map((stand) => stand.id);
 
 function standForGate(gateId: number, elevation: number): THREE.Vector3 {
-  return new THREE.Vector3(130, elevation, HOME_GATE_Z[(gateId - 1) % HOME_GATE_Z.length]);
+  const stand = HOME_GATE_STANDS.find((candidate) => candidate.id === gateId) ?? HOME_GATE_STANDS[0];
+  return new THREE.Vector3(130, elevation, stand.z);
 }
 
 /** Parking stand for an airport: a fixed offset from the airport centre. */
 function standPosition(airport: AirportDefinition, index: number): THREE.Vector3 {
   if (airport.code === HOME_AIRPORT.code) {
-    return standForGate((index % HOME_GATE_Z.length) + 1, airport.elevation);
+    return standForGate(HOME_GATE_IDS[index % HOME_GATE_IDS.length], airport.elevation);
   }
   return new THREE.Vector3(
     airport.x + 130,
@@ -288,7 +301,10 @@ export class RouteTraffic {
       taxiFrom: new THREE.Vector3(),
       taxiTo: new THREE.Vector3(),
       runwayFor: null,
-      gateId: startsParked && origin.code === HOME_AIRPORT.code ? (index % 8) + 1 : null,
+      gateId:
+        startsParked && origin.code === HOME_AIRPORT.code
+          ? HOME_GATE_IDS[index % HOME_GATE_IDS.length]
+          : null,
       stand: standPosition(destination, index),
       holdingCenter: new THREE.Vector3(),
       holdingAngle: 0,
@@ -302,8 +318,8 @@ export class RouteTraffic {
       // TrafficManager aircraft cannot be assigned the same stand.
       let stand = standPosition(origin, index);
       if (origin.code === HOME_AIRPORT.code && this.shared) {
-        for (let k = 0; k < HOME_GATE_Z.length; k++) {
-          const gateId = ((index + k) % HOME_GATE_Z.length) + 1;
+        for (let k = 0; k < HOME_GATE_IDS.length; k++) {
+          const gateId = HOME_GATE_IDS[(index + k) % HOME_GATE_IDS.length];
           if (this.shared.requestGate(gateId, `route-${index}`)) {
             agent.gateId = gateId;
             stand = standForGate(gateId, origin.elevation);
@@ -778,8 +794,8 @@ export class RouteTraffic {
             }
             let stand = standPosition(agent.destination, agent.index);
             if (agent.destination.code === HOME_AIRPORT.code && this.shared) {
-              for (let k = 0; k < HOME_GATE_Z.length; k++) {
-                const gateId = ((agent.index + k) % HOME_GATE_Z.length) + 1;
+              for (let k = 0; k < HOME_GATE_IDS.length; k++) {
+                const gateId = HOME_GATE_IDS[(agent.index + k) % HOME_GATE_IDS.length];
                 if (this.shared.requestGate(gateId, `route-${agent.index}`)) {
                   agent.gateId = gateId;
                   stand = standForGate(gateId, agent.destination.elevation);

@@ -55,6 +55,15 @@ export interface TrafficManagerStats {
   gatesFree: number;
 }
 
+/** Passenger stands at MEX, including the two remote stands 12-13. */
+const PASSENGER_GATE_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 12, 13];
+const CARGO_GATE_IDS = [9, 10, 11];
+const WIDE_BODY_GATE_IDS = [1, 4];
+
+function isPassengerGate(gateId: number): boolean {
+  return PASSENGER_GATE_IDS.includes(gateId);
+}
+
 /* ------------------------------------------------------------------ */
 /* Procedural ground / air models                                      */
 /* ------------------------------------------------------------------ */
@@ -661,10 +670,10 @@ export class TrafficManager {
     const spec = getFleetSpec(flight.aircraftType);
     const allowedGates =
       spec.category === 'cargo'
-        ? [9, 10, 11]
+        ? CARGO_GATE_IDS
         : spec.category === 'wide'
-          ? [1, 4]
-          : undefined;
+          ? WIDE_BODY_GATE_IDS
+          : PASSENGER_GATE_IDS;
     const gate = this.pickFreeGate(allowedGates);
     if (gate === undefined) return false;
 
@@ -728,7 +737,7 @@ export class TrafficManager {
     object.rotation.y = agent.yaw;
     this.aircraft.push(agent);
     this.gateOccupancy.set(gateId, flight.flightNumber);
-    if (this.shared && gateId >= 1 && gateId <= 8) {
+    if (this.shared && isPassengerGate(gateId)) {
       this.shared.requestGate(gateId, `tm-${flight.flightNumber}`);
     }
     // Departures start parked at the gate, so they need their ground
@@ -1147,7 +1156,7 @@ export class TrafficManager {
       // Also free in the shared controller: a RouteTraffic aircraft may
       // already be parked at this gate even though this manager did not
       // assign it.
-      if (this.shared && node.gateId >= 1 && node.gateId <= 8 && !this.shared.isGateFree(node.gateId)) continue;
+      if (this.shared && isPassengerGate(node.gateId) && !this.shared.isGateFree(node.gateId)) continue;
       return { gateId: node.gateId, nodeIndex: i };
     }
     return undefined;

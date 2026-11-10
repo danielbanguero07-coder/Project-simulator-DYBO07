@@ -6,8 +6,8 @@ import { TrafficManager } from './trafficManager';
  *
  * Coordinate layout (matches `qualityDemo.ts` scenery):
  *   - Runway 36L/18R .......... x = 0,     z = -1150 .. +1150
- *   - Four runway exits ....... z = -600, -300, +300, +600
- *   - Parallel taxiway Alpha .. x = 40,    z = -1100 .. +1100
+ *   - Four high-speed exits ... z = -600, -300, +300, +600 (22 deg, 130 m run)
+ *   - Parallel taxiway Alpha .. x = 72,    z = -1100 .. +1100 (36 m wide)
  *   - Apron taxilane Bravo .... x = 95
  *   - Gate stands 1-8 ......... x = 130,   z = -180, -100, -20, 60, 150, 240, 330, 420
  *                               (gates 1 and 4 accept wide-body aircraft)
@@ -42,15 +42,17 @@ export const AIRPORT_LAYOUT = {
   runwayX: 0,
   runwayThresholdZ: -1150,
   runwayEndZ: 1150,
-  /** Centre of the parallel taxiway Alpha (asphalt strip is 26 m wide). */
-  taxiwayX: 40,
+  /** Centre of the wide parallel taxiway Alpha (asphalt strip is 36 m wide). */
+  taxiwayX: 72,
   /** Centre of the apron taxilane Bravo. */
   taxilaneX: 95,
   gateX: 130,
   leadX: 110,
   serviceLaneX: 160,
-  /** Z of the four asphalt exit taxiways joining the runway to Alpha. */
+  /** Z of the four high-speed exits joining the runway to Alpha. */
   runwayExitZ: [-600, -300, 300, 600] as number[],
+  /** Longitudinal run of each high-speed exit (metres towards -Z). */
+  runwayExitDrop: 130,
   /** Z of the apron cross taxilanes joining Alpha to Bravo. */
   crossTaxilaneZ: [-500, -300, 100, 600] as number[],
   /** Passenger gates 1..8 (gates 1 and 4 accept wide-bodies). */
@@ -83,6 +85,7 @@ export function buildAirportGroundNetwork(tm: TrafficManager): GroundNetwork {
     leadX,
     serviceLaneX,
     runwayExitZ,
+    runwayExitDrop,
     crossTaxilaneZ,
     gateZ,
     remoteGateZ,
@@ -107,10 +110,12 @@ export function buildAirportGroundNetwork(tm: TrafficManager): GroundNetwork {
   runwayZ.forEach((z, i) => runwayNodeForZ.set(z, runwayNodes[i]));
   for (let i = 0; i < runwayNodes.length - 1; i++) link(runwayNodes[i], runwayNodes[i + 1]);
 
-  // Parallel taxiway Alpha. The union of exit and cross-taxilane Z values
-  // gives the nodes where the runway exits and apron entrances branch off.
+  // Parallel taxiway Alpha. The union of exit-merge and cross-taxilane Z
+  // values gives the nodes where the runway exits and apron entrances branch
+  // off. High-speed exits merge 130 m further down the runway direction.
+  const exitMergeZ = runwayExitZ.map((z) => z - runwayExitDrop);
   const alphaZ = Array.from(
-    new Set([-1100, 1100, ...runwayExitZ, ...crossTaxilaneZ])
+    new Set([-1100, 1100, ...exitMergeZ, ...crossTaxilaneZ])
   ).sort((a, b) => a - b);
   const alphaByZ = new Map<number, number>();
   const alphaNodes = alphaZ.map((z, i) => {
@@ -120,15 +125,21 @@ export function buildAirportGroundNetwork(tm: TrafficManager): GroundNetwork {
   });
   for (let i = 0; i < alphaNodes.length - 1; i++) link(alphaNodes[i], alphaNodes[i + 1]);
 
-  // Runway exits: runway -> holding point -> Alpha. The holding node sits
-  // between the runway edge and the taxiway, exactly where the hold-short
-  // bars are painted.
+  // High-speed exits: runway centreline -> runway edge -> holding point ->
+  // Alpha. The diagonal matches the 22-degree asphalt strip drawn in the
+  // scenery, so aircraft visibly turn off along the painted exit.
   runwayExitZ.forEach((z, i) => {
     const rwy = runwayNodeForZ.get(z);
-    const alpha = alphaByZ.get(z);
+    const alpha = alphaByZ.get(z - runwayExitDrop);
     if (rwy === undefined || alpha === undefined) return;
-    const hold = tm.addNode(V(26, z), [], 'holding', undefined, { label: `HOLD-${i + 1}` });
-    link(rwy, hold);
+    const edge = tm.addNode(V(23, z), [], 'runway', undefined, { label: `RWY-EXIT-${i + 1}-EDGE` });
+    const holdX = 45;
+    const t = (holdX - 23) / (taxiwayX - 23);
+    const hold = tm.addNode(V(holdX, z - runwayExitDrop * t), [], 'holding', undefined, {
+      label: `HOLD-${i + 1}`
+    });
+    link(rwy, edge);
+    link(edge, hold);
     link(hold, alpha);
   });
 

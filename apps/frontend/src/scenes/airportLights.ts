@@ -177,6 +177,8 @@ export function createRunwayLights(options: RunwayLightOptions = {}): RunwayLigh
 export interface TaxiwayLightOptions {
   /** Centre X of the parallel taxiway Alpha. */
   alphaX?: number;
+  /** Full width of the Alpha asphalt strip (metres). */
+  alphaWidth?: number;
   /** Centre X of the apron taxilane Bravo. */
   taxilaneX?: number;
   /** Usable width of the taxilane around each stand. */
@@ -193,7 +195,8 @@ export function createTaxiwayLights(
   const group = new THREE.Group();
   group.name = 'taxiwayLights';
 
-  const alphaX = options.alphaX ?? 40;
+  const alphaX = options.alphaX ?? 72;
+  const alphaWidth = options.alphaWidth ?? 36;
   const taxilaneX = options.taxilaneX ?? 95;
   const laneWidth = options.laneWidth ?? 20;
   const crossZ = options.crossZ ?? [];
@@ -217,11 +220,12 @@ export function createTaxiwayLights(
   dashes.frustumCulled = false;
   group.add(dashes);
 
-  // Blue edge lights along both sides of Alpha.
+  // Blue edge lights along both sides of the wide Alpha strip.
+  const alphaHalf = alphaWidth / 2 - 1;
   const alphaEdgePositions: THREE.Vector3[] = [];
   for (let z = -1100; z <= 1100; z += 50) {
-    alphaEdgePositions.push(new THREE.Vector3(alphaX - 12, 0.08, z));
-    alphaEdgePositions.push(new THREE.Vector3(alphaX + 12, 0.08, z));
+    alphaEdgePositions.push(new THREE.Vector3(alphaX - alphaHalf, 0.08, z));
+    alphaEdgePositions.push(new THREE.Vector3(alphaX + alphaHalf, 0.08, z));
   }
   group.add(buildLampRow(alphaEdgePositions, LIGHT_COLORS.taxiwayEdge, 0.26));
 
@@ -234,12 +238,12 @@ export function createTaxiwayLights(
   }
   group.add(buildLampRow(standPositions, LIGHT_COLORS.taxiwayEdge, 0.28));
 
-  // Blue edge lights along the apron cross taxilanes.
+  // Blue edge lights along the wide apron cross taxilanes.
   const crossPositions: THREE.Vector3[] = [];
   for (const cz of crossZ) {
-    for (let x = alphaX + laneWidth / 2; x <= taxilaneX; x += 8) {
-      crossPositions.push(new THREE.Vector3(x, 0.08, cz - 8));
-      crossPositions.push(new THREE.Vector3(x, 0.08, cz + 8));
+    for (let x = alphaX - 12; x <= 120; x += 8) {
+      crossPositions.push(new THREE.Vector3(x, 0.08, cz - 15));
+      crossPositions.push(new THREE.Vector3(x, 0.08, cz + 15));
     }
   }
   if (crossPositions.length > 0) {
