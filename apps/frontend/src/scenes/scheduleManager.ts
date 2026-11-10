@@ -37,18 +37,20 @@ export class ScheduleManager {
 
       const pool = cargo ? CARGO_AIRLINES : PAX_AIRLINES;
       const code = `${pool[Math.floor(Math.random() * pool.length)]}${Math.floor(Math.random() * 9000) + 1000}`;
-      // Scheduled traffic always departs from the modelled home hub and heads
-      // to one of the remote airports in the world catalogue.
+      // ~40% inbound, ~60% outbound. The direction is fixed here, in the
+      // schedule — TrafficManager no longer flips a coin per flight, so a
+      // MEX -> CUN flight can never show up as an arrival at MEX.
+      const inbound = Math.random() < 0.4;
       const route = pickRoute(cargo, HOME_AIRPORT.code);
       const departure = (i + Math.random() * 0.5) % 24;
 
       this.flights.push(createFlight({
         flightNumber: code,
         aircraftType: type,
-        origin: HOME_AIRPORT.code,
-        destination: route.destination,
+        origin: inbound ? route.destination : HOME_AIRPORT.code,
+        destination: inbound ? HOME_AIRPORT.code : route.destination,
         scheduledDeparture: departure,
-        scheduledArrival: (departure + 2.5) % 24,
+        scheduledArrival: inbound ? departure : (departure + 2.5) % 24,
       }));
     }
     

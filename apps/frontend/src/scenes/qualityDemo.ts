@@ -21,6 +21,7 @@ import {
 } from './airportTextures';
 import { buildWorld } from './worldGenerator';
 import { RouteTraffic } from './airRoutes';
+import { SharedAirport } from './runwayControl';
 import { ALL_AIRPORTS, HOME_AIRPORT, ROUTES } from './airports';
 
 export type QualityTier = 2 | 3;
@@ -116,7 +117,11 @@ export function createQualityDemo(
   });
 
   const timeManager = new TimeManager();
-  const trafficManager = new TrafficManager(scene);
+  // One shared runway/gate controller for both traffic systems: without
+  // it, RouteTraffic and TrafficManager used the same runway and gates
+  // independently, and several aircraft ended up on runway 36L at once.
+  const sharedAirport = new SharedAirport();
+  const trafficManager = new TrafficManager(scene, sharedAirport);
   const scheduleManager = new ScheduleManager(timeManager, trafficManager);
   const worldManager = new WorldManager(scene);
 
@@ -809,10 +814,10 @@ export function createQualityDemo(
   scene.add(jetwayLights);
 
   scheduleManager.initSchedule();
-  trafficManager.seedAmbientTraffic(6);
+  trafficManager.seedAmbientTraffic(8);
 
   // Aircraft flying between the home hub and the remote airports.
-  const routeTraffic = new RouteTraffic(scene, { premium, count: premium ? 10 : 6 });
+  const routeTraffic = new RouteTraffic(scene, { premium, count: premium ? 10 : 6, shared: sharedAirport });
 
   const networkReport = validateGroundNetwork(trafficManager, network);
   if (networkReport.ok) {

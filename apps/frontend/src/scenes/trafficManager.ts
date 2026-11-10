@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Flight, FlightStatus } from './flight';
+import { HOME_AIRPORT } from './airports';
+import type { SharedAirport } from './runwayControl';
 import {
   getFleetSpec,
   pickLivery,
@@ -76,8 +78,11 @@ function prepareGlbAircraft(source: THREE.Object3D, spec: FleetSpec, livery: num
     const cloned = materials.map((material) => {
       const m = material.clone() as THREE.MeshStandardMaterial;
       if (m.color) {
-        // Blend towards the airline colour instead of replacing the texture.
-        m.color.lerp(liveryColor, m.map ? 0.35 : 0.8);
+        // Strong blend towards the airline colour instead of replacing the
+        // texture: the GLB textures are light grey/white, and a 0.35 blend
+        // left the aircraft looking blank white.
+        m.color.lerp(liveryColor, m.map ? 0.65 : 0.8);
+        if (m.emissive) m.emissive.copy(m.color).multiplyScalar(0.15);
       }
       m.envMapIntensity = 1.1;
       return m;
@@ -393,7 +398,7 @@ export function animateVehicleLights(object: THREE.Object3D, time: number) {
     mesh.visible = pulse > -0.55;
   }
 }
-type AircraftState = 'rollout' | 'taxiIn' | 'parked' | 'boarding' | 'pushback' | 'taxiOut' | 'takeoff' | 'done';
+type AircraftState = 'approach' | 'rollout' | 'taxiIn' | 'parked' | 'boarding' | 'pushback' | 'taxiOut' | 'holding' | 'takeoff' | 'done';
 
 interface ServiceVehicleAgent {
   object: THREE.Object3D;
@@ -410,6 +415,8 @@ interface ServiceVehicleAgent {
   flightNumber?: string;
   area: number;
   patrol?: boolean;
+  /** Seconds this vehicle has been blocked by another one in front of it. */
+  blockedTimer: number;
 }
 
 interface AircraftAgent {
@@ -426,6 +433,8 @@ interface AircraftAgent {
   reverse: boolean;
   takeoffSpeed: number;
   altitude: number;
+  /** True while this aircraft holds the shared runway. */
+  runwayHeld: boolean;
 }
 
 function lerpAngle(a: number, b: number, t: number): number {
@@ -457,7 +466,10 @@ export class TrafficManager {
   /** Accumulated sim time used to pulse vehicle beacons. */
   private elapsed = 0;
 
-  constructor(private scene: THREE.Scene) {}
+  constructor(
+    private scene: THREE.Scene,
+    private shared?: SharedAirport
+  ) {}
 
   /* --------------------------- aircraft models --------------------------- */
 
@@ -602,7 +614,8 @@ export class TrafficManager {
       dwell: 999,
       home: startNodeIndex,
       target: startNodeIndex,
-      area: 0
+      area: 0,
+      blockedTimer: 0
     });
   }
 
@@ -617,7 +630,7 @@ export class TrafficManager {
       kind,
       route,
       routeIndex: 1,
-      speed: kind === 'bus' ? 12 : 9,
+      speed: kind === 'bus' ? 14 : 11,
       yaw: 0,
       state: 'outbound',
       dwell: 0,
@@ -625,7 +638,8 @@ export class TrafficManager {
       target,
       gateId,
       flightNumber,
-      area: 0
+      area: 0,
+      blockedTimer: 0
     };
     this.vehicles.push(agent);
     return agent;
@@ -645,7 +659,17 @@ export class TrafficManager {
     const gate = this.pickFreeGate(allowedGates);
     if (gate === undefined) return false;
 
-    const isArrival = Math.random() < 0.5;
+    // Arrival or departure is decided by the flight itself, never by a
+    // coin flip: a MEX -> CUN flight cannot suddenly appear as an arrival
+    // at MEX, and a flight to MEX cannot start parked at a MEX gate.
+    const isArrival = flight.destination === HOME_AIRPORT.code;
+
+    // An arrival needs the runway now: if another aircraft is using it,
+    // do not spawn at all — the schedule retries in a few seconds, and
+    // the aircraft appears on a clear final instead of on top of traffic.
+    if (isArrival && this.shared && !this.shared.runway.request(`tm-${flight.flightNumber}`)) {
+      return false;
+    }
     const gateNodeIndex = gate.nodeIndex;
     const gateId = gate.gateId;
     const livery = pickLivery(spec);
@@ -668,22 +692,22 @@ export class TrafficManager {
       gateNode: gateNodeIndex,
       reverse: false,
       takeoffSpeed: 0,
-      altitude: 0
+      altitude: 0,
+      runwayHeld: isArrival && this.shared !== undefined
     };
 
     if (isArrival) {
-      const exitNode = this.findNode(n => n.type === 'runway' && Math.abs(n.position.z + 300) < 1);
-      if (!exitNode) return false;
-      const taxiPath = this.findPath(exitNode, gateNodeIndex, 'aircraft');
-      if (!taxiPath) return false;
-      // Spawn on the runway just before the exit, rolling out.
-      const exitPos = this.nodes[exitNode].position;
-      object.position.set(exitPos.x, 0, exitPos.z + 260);
-      agent.state = 'rollout';
-      agent.route = [exitNode, ...taxiPath.slice(1)];
+      // Approach from the south, in the air: 180 m high, 2.6 km out,
+      // heading north (-Z) towards the runway. It lands at the threshold
+      // (z = +1150) and rolls out — it never pops into existence on the
+      // runway, already rolling, as it did before.
+      object.position.set(0, 180, 2600);
+      agent.state = 'approach';
+      agent.route = [];
       agent.routeIndex = 0;
       agent.yaw = Math.PI;
-      agent.speed = 45;
+      agent.speed = 75;
+      agent.altitude = 180;
       flight.status = FlightStatus.Landing;
     } else {
       object.position.copy(this.nodes[gateNodeIndex].position);
@@ -695,6 +719,14 @@ export class TrafficManager {
     object.rotation.y = agent.yaw;
     this.aircraft.push(agent);
     this.gateOccupancy.set(gateId, flight.flightNumber);
+    if (this.shared && gateId >= 1 && gateId <= 8) {
+      this.shared.requestGate(gateId, `tm-${flight.flightNumber}`);
+    }
+    // Departures start parked at the gate, so they need their ground
+    // services now. Arrivals get theirs when they finish taxiing in
+    // (spawnGateServices in the taxiIn case) — calling it here for them
+    // would dispatch the trucks twice.
+    if (!isArrival) this.spawnGateServices(agent);
     console.info(
       `[Traffic] ${flight.flightNumber} ${isArrival ? 'arrival' : 'departure'} assigned to gate ${gateId}`
     );
@@ -717,8 +749,47 @@ export class TrafficManager {
       animatePropellers(agent.object, dt);
 
       switch (agent.state) {
+        case 'approach': {
+          // Final approach: descend from 180 m to the runway, heading
+          // north (-Z) at ~75 m/s. Touchdown is at the threshold z = +1150.
+          agent.altitude = Math.max(0, agent.altitude - 10 * dt);
+          agent.object.position.z -= agent.speed * dt;
+          agent.object.position.x = 0;
+          agent.object.position.y = agent.altitude;
+          agent.object.rotation.set(0.04, agent.yaw, 0);
+          if (agent.object.position.z <= 1150 && agent.altitude <= 0) {
+            const runwayEntry = this.findNode(
+              (n) => n.type === 'runway' && n.position.z > 1000
+            );
+            if (runwayEntry === undefined) {
+              this.removeAircraft(agent, i);
+              break;
+            }
+            const taxiPath = this.findPath(runwayEntry, agent.gateNode, 'aircraft');
+            if (!taxiPath) {
+              this.removeAircraft(agent, i);
+              break;
+            }
+            agent.object.position.set(0, 0, 1150);
+            agent.object.rotation.set(0, agent.yaw, 0);
+            agent.state = 'rollout';
+            agent.route = taxiPath;
+            agent.routeIndex = 0;
+            agent.timer = 0;
+            agent.speed = 45;
+            agent.flight.status = FlightStatus.Taxiing;
+          }
+          break;
+        }
+
         case 'rollout':
           if (this.advanceAlongRoute(agent, dt, true)) {
+            // Clear of the runway (at the exit): release it for the next
+            // landing or departure.
+            if (agent.runwayHeld && this.shared) {
+              this.shared.runway.release(`tm-${agent.flight.flightNumber}`);
+              agent.runwayHeld = false;
+            }
             agent.state = 'taxiIn';
             agent.timer = 0;
             agent.speed = 22;
@@ -737,7 +808,10 @@ export class TrafficManager {
           break;
 
         case 'parked':
-          if (agent.timer > 14) {
+          // Turnaround at the gate: 25 s unloading / services, then
+          // boarding. The aircraft used to leave after only 14 s, before
+          // the fuel and baggage trucks had even arrived.
+          if (agent.timer > 25) {
             agent.state = 'boarding';
             agent.timer = 0;
             agent.flight.status = FlightStatus.Boarding;
@@ -745,7 +819,9 @@ export class TrafficManager {
           break;
 
         case 'boarding':
-          if (agent.timer > 12) {
+          // 35 s loading passengers and cargo, with the service vehicles
+          // still at the stand. Total gate time is now ~60 s, not 26 s.
+          if (agent.timer > 35) {
             this.finishGateServices(agent);
             const lead = this.findNode(n => n.type === 'apron' && n.gateId === agent.gateId);
             if (lead !== undefined) {
@@ -787,12 +863,37 @@ export class TrafficManager {
 
         case 'taxiOut':
           if (this.advanceAlongRoute(agent, dt, true)) {
+            // At the runway threshold: line up and wait if the runway is
+            // busy, instead of rolling onto an aircraft that is landing.
+            if (this.shared && !agent.runwayHeld) {
+              if (!this.shared.runway.request(`tm-${agent.flight.flightNumber}`)) {
+                agent.state = 'holding';
+                agent.timer = 0;
+                agent.speed = 0;
+                break;
+              }
+              agent.runwayHeld = true;
+            }
             agent.state = 'takeoff';
             agent.timer = 0;
             agent.takeoffSpeed = 30;
             agent.flight.status = FlightStatus.Takeoff;
             agent.yaw = Math.PI; // runway heading (towards -Z)
             console.info(`[Traffic] ${agent.flight.flightNumber} lined up and rolling on RWY18`);
+          }
+          break;
+
+        case 'holding':
+          // Lined up at the threshold, waiting for the runway. Retry
+          // every frame; the runway is released as soon as the other
+          // aircraft clears it, so this wait is normally a few seconds.
+          if (this.shared && this.shared.runway.request(`tm-${agent.flight.flightNumber}`)) {
+            agent.runwayHeld = true;
+            agent.state = 'takeoff';
+            agent.timer = 0;
+            agent.takeoffSpeed = 30;
+            agent.flight.status = FlightStatus.Takeoff;
+            agent.yaw = Math.PI;
           }
           break;
 
@@ -804,7 +905,15 @@ export class TrafficManager {
             agent.object.position.y = agent.altitude;
             agent.object.rotation.x = THREE.MathUtils.lerp(agent.object.rotation.x, -0.16, dt * 1.5);
           }
-          if (agent.object.position.z < -1700 || agent.altitude > 900) {
+          // Clear of the runway once airborne and climbing: release it.
+          if (agent.runwayHeld && agent.altitude > 300 && this.shared) {
+            this.shared.runway.release(`tm-${agent.flight.flightNumber}`);
+            agent.runwayHeld = false;
+          }
+          // Fly away from the airport before disappearing: the old limit
+          // (z < -1700, altitude > 900) made departures vanish right over
+          // the airfield, in full view of the player.
+          if (agent.object.position.z < -4500 || agent.altitude > 1500) {
             this.removeAircraft(agent, i);
           }
           break;
@@ -878,20 +987,30 @@ export class TrafficManager {
       }
 
       // Small separation rule so trucks queue instead of driving through
-      // each other on the service lane.
+      // each other on the service lane. But a block is only a yield, not
+      // a permanent stop: two trucks facing each other used to deadlock
+      // forever, both waiting for the other to move. After 2.5 s blocked,
+      // this one creeps forward anyway.
       if (v.routeIndex < v.route.length) {
         const targetPos = this.nodes[v.route[v.routeIndex]].position;
         const dir = targetPos.clone().sub(v.object.position);
         dir.y = 0;
         if (dir.lengthSq() > 0.01 && this.isVehicleBlocked(v, dir.normalize())) {
-          continue;
+          v.blockedTimer += dt;
+          if (v.blockedTimer < 2.5) continue;
+          v.blockedTimer = 0;
+        } else {
+          v.blockedTimer = 0;
         }
       }
 
       if (this.advanceVehicle(v, dt)) {
         if (v.state === 'outbound') {
           v.state = 'dwell';
-          v.dwell = 5 + Math.random() * 6;
+          // Gate-service trucks stay at the stand for the whole
+          // turnaround; finishGateServices removes them when the aircraft
+          // leaves. Only patrol trucks dwell a few seconds and go back.
+          v.dwell = v.flightNumber ? 999 : 5 + Math.random() * 6;
         } else {
           if (v.patrol) {
             const nextTarget = this.pickPatrolTarget(v.home);
@@ -983,6 +1102,15 @@ export class TrafficManager {
     if (baggageDepot !== undefined && spots.length > 1) {
       this.spawnVehicle('baggage', baggageDepot, spots[1].idx, agent.gateId, agent.flight.flightNumber);
     }
+    // Catering and the crew/passenger bus use the same two spots (one
+    // truck per side of the aircraft), so the gate visibly has four
+    // vehicles working it, not just two that left after a few seconds.
+    if (baggageDepot !== undefined && spots.length > 0) {
+      this.spawnVehicle('catering', baggageDepot, spots[0].idx, agent.gateId, agent.flight.flightNumber);
+    }
+    if (fuelDepot !== undefined && spots.length > 1) {
+      this.spawnVehicle('bus', fuelDepot, spots[1].idx, agent.gateId, agent.flight.flightNumber);
+    }
   }
 
   private finishGateServices(agent: AircraftAgent) {
@@ -1007,6 +1135,10 @@ export class TrafficManager {
       if (node.type !== 'gate' || node.gateId === undefined) continue;
       if (allowedGateIds && !allowedGateIds.includes(node.gateId)) continue;
       if (this.gateOccupancy.has(node.gateId)) continue;
+      // Also free in the shared controller: a RouteTraffic aircraft may
+      // already be parked at this gate even though this manager did not
+      // assign it.
+      if (this.shared && node.gateId >= 1 && node.gateId <= 8 && !this.shared.isGateFree(node.gateId)) continue;
       return { gateId: node.gateId, nodeIndex: i };
     }
     return undefined;
@@ -1016,6 +1148,13 @@ export class TrafficManager {
     this.scene.remove(agent.object);
     disposeObject(agent.object);
     this.gateOccupancy.delete(agent.gateId);
+    if (this.shared) {
+      if (agent.runwayHeld) {
+        this.shared.runway.release(`tm-${agent.flight.flightNumber}`);
+        agent.runwayHeld = false;
+      }
+      this.shared.releaseGate(`tm-${agent.flight.flightNumber}`);
+    }
     this.finishGateServices(agent);
     this.aircraft.splice(index, 1);
   }

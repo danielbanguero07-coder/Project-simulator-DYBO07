@@ -179,7 +179,14 @@ export function pickFleetType(category?: AircraftCategory): string {
 }
 
 export function pickLivery(spec: FleetSpec): number {
-  return spec.liveries[Math.floor(Math.random() * spec.liveries.length)];
+  // Never pick the near-white livery (0xe9edf2) for AI traffic: the GLB
+  // textures are already light grey/white, so a white livery + a weak
+  // tint made the whole fleet look like blank white planes, especially
+  // at night. Coloured liveries (blue / red / green / yellow) stay
+  // readable from the apron and in the air.
+  const coloured = spec.liveries.filter((c) => c !== 0xe9edf2);
+  const pool = coloured.length > 0 ? coloured : spec.liveries;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 /**

@@ -8,18 +8,37 @@ import {
   type FleetSpec
 } from './fleet';
 import { pickRoute, getAirport, HOME_AIRPORT, type AirportDefinition } from './airports';
+import type { SharedAirport } from './runwayControl';
+import { buildAirNetwork, validateAirNetwork, type AirNetwork, type AirNode } from './airNetwork';
 
 /**
  * Air-route traffic.
  *
- * Aircraft fly between the airports in `airports.ts`. They follow straight
- * segments (the world is small enough that great-circle curvature is
- * irrelevant), climb after departure and descend into the destination, and
- * pick a new route once they reach the other end.
+ * Aircraft fly between the airports in `airports.ts` on a full, coherent
+ * cycle instead of bouncing back and forth in the air:
  *
- * Everything uses the same "nose points +Z, yaw rotates it" convention as the
- * rest of the simulation.
+ *   takeoff / climb -> cruise (flat) -> descent -> landing rollout
+ *   -> taxi to a stand -> parked (turnaround: unload / load, services)
+ *   -> taxi out -> takeoff on the return leg
+ *
+ * That is the whole point of this file: a plane never reverses direction
+ * in mid-air. It only changes heading after it has landed, parked and
+ * waited at the destination, and every heading change is smoothed
+ * (limited turn rate) instead of an instant 180-degree snap.
+ *
+ * The flight path itself is a real route through the nodes of
+ * `airNetwork.ts`: runway -> departure fix -> en-route waypoint ->
+ * arrival fix -> final -> destination runway. The heading always points
+ * at the next node instead of a Bezier tangent, altitude follows the
+ * node altitudes at a limited climb/descent rate, and if the runway is
+ * busy on final the aircraft diverts to the holding node and rejoins
+ * the arrival route when it is free.
+ *
+ * Everything uses the same "nose points +Z, yaw rotates it" convention as
+ * the rest of the simulation.
  */
+
+type AirPhase = 'airborne' | 'holding' | 'landing' | 'taxiIn' | 'parked' | 'taxiOut';
 
 interface AirAgent {
   object: THREE.Group;
@@ -29,21 +48,89 @@ interface AirAgent {
   distance: number;
   /** Progress along the leg, 0 (origin) .. 1 (destination). */
   t: number;
-  /** Cruise speed in metres per second. */
+  /** Current speed in metres per second. */
   speed: number;
-  cruiseAltitude: number;
+  /** Per-aircraft cruise factor, so two flights on the same leg separate. */
+  speedFactor: number;
+  /** Current altitude (metres), moved towards the next node at a limited rate. */
+  altitude: number;
+  /** Node route for the current leg, from airNetwork.ts. */
+  navRoute: AirNode[];
+  /** Index inside navRoute of the node the aircraft is flying towards. */
+  navIndex: number;
   /** Used to place the red/green wingtip lights. */
   wingspan: number;
   length: number;
   placeholder?: THREE.Object3D;
+  /** Which part of the cycle this aircraft is in. */
+  phase: AirPhase;
+  /** Time spent in the current phase, in seconds. */
+  phaseTime: number;
+  /** Smoothed heading (radians) and pitch, never snapped. */
+  yaw: number;
+  pitch: number;
+  /** How long this aircraft waits parked before the return leg. */
+  parkedDuration: number;
+  /** Stand index, used to pick a different parking spot per aircraft. */
+  index: number;
+  taxiFrom: THREE.Vector3;
+  taxiTo: THREE.Vector3;
+  /** What the runway is held for, if this aircraft holds it. */
+  runwayFor: 'takeoff' | 'landing' | null;
+  /** Gate reserved at MEX, if any (1-8). */
+  gateId: number | null;
+  /** Stand this aircraft will park at on the current leg. */
+  stand: THREE.Vector3;
+  /** Holding orbit centre and angle while waiting for the runway. */
+  holdingCenter: THREE.Vector3;
+  holdingAngle: number;
+  /** Stack level assigned at the holding fix (0..3): altitude + radius. */
+  holdingLevel: number;
 }
 
 export interface RouteTrafficOptions {
   premium?: boolean;
   count?: number;
+  /** Shared runway/gate controller (one per game, see runwayControl.ts). */
+  shared?: SharedAirport;
 }
 
 const SPEC_POOL = ['A320', 'B737', 'A321', 'A350', 'B787', 'A380'];
+
+/** Gate stands at the home hub, matching groundNetwork.ts (x = 130). */
+const HOME_GATE_Z = [-180, -100, -20, 60, 150, 240, 330, 420];
+
+function standForGate(gateId: number, elevation: number): THREE.Vector3 {
+  return new THREE.Vector3(130, elevation, HOME_GATE_Z[(gateId - 1) % HOME_GATE_Z.length]);
+}
+
+/** Parking stand for an airport: a fixed offset from the airport centre. */
+function standPosition(airport: AirportDefinition, index: number): THREE.Vector3 {
+  if (airport.code === HOME_AIRPORT.code) {
+    return standForGate((index % HOME_GATE_Z.length) + 1, airport.elevation);
+  }
+  return new THREE.Vector3(
+    airport.x + 130,
+    airport.elevation,
+    airport.z + ((index * 97) % 400) - 200
+  );
+}
+
+/** Runway heading (degrees, clockwise from +Z) -> yaw (radians). */
+function headingToYaw(headingDeg: number): number {
+  return (headingDeg * Math.PI) / 180;
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = THREE.MathUtils.clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+function lerpAngle(a: number, b: number, t: number): number {
+  let delta = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (delta < -Math.PI) delta += Math.PI * 2;
+  return a + delta * THREE.MathUtils.clamp(t, 0, 1);
+}
 
 /** Soft round dot used by the route-traffic navigation lights. */
 function makeNavLightTexture(size = 32): THREE.CanvasTexture {
@@ -72,10 +159,23 @@ export class RouteTraffic {
   private navMaterial: THREE.PointsMaterial;
   private navPoints: THREE.Points;
   private navPositions: Float32Array;
+  private shared?: SharedAirport;
+  /** Azimuth route graph built from airports.ts (see airNetwork.ts). */
+  private network: AirNetwork;
 
   constructor(scene: THREE.Scene, options: RouteTrafficOptions = {}) {
     this.scene = scene;
+    this.shared = options.shared;
     this.premium = options.premium ?? true;
+    this.network = buildAirNetwork();
+    const report = validateAirNetwork(this.network);
+    if (report.ok) {
+      console.info(
+        `[air-network] OK · ${report.nodeCount} nodes, ${report.edgeCount} links`
+      );
+    } else {
+      console.error('[air-network] invalid network', report.errors);
+    }
     const count = options.count ?? (this.premium ? 10 : 6);
     for (let i = 0; i < count; i++) {
       this.spawn(i % 2 === 0, i);
@@ -114,7 +214,7 @@ export class RouteTraffic {
     scene.add(this.navPoints);
   }
 
-  /** Number of aircraft currently in the air (handy for the HUD/tests). */
+  /** Number of aircraft currently in the traffic system (air + parked). */
   get count(): number {
     return this.agents.length;
   }
@@ -123,7 +223,9 @@ export class RouteTraffic {
   snapshot() {
     return this.agents.map((agent) => ({
       flight: `${agent.origin.code}-${agent.destination.code}`,
+      phase: agent.phase,
       t: Number(agent.t.toFixed(3)),
+      speed: Math.round(agent.speed),
       altitude: Math.round(agent.object.position.y),
       x: Math.round(agent.object.position.x),
       z: Math.round(agent.object.position.z),
@@ -147,16 +249,20 @@ export class RouteTraffic {
       1,
       Math.hypot(destination.x - origin.x, destination.z - origin.z)
     );
-    const cruiseAltitude = Math.min(3400, Math.max(1100, distance * 0.26));
+    const navRoute = this.network.findFlightRoute(origin.code, destination.code) ?? [];
 
     const livery = pickLivery(spec);
     const object = this.buildModel(spec, livery);
     object.rotation.order = 'YXZ';
 
-    // Distribute the fleet along its legs instead of dropping several planes
-    // at low altitude over the departure airport. 0.30..0.70 keeps the initial
-    // traffic at cruise, far from the player and from each other.
-    const initialT = 0.3 + ((index * 0.173) % 0.4);
+    // Not every aircraft starts in the air: one in three starts parked at
+    // its origin, part-way through its turnaround, so the sky is not a
+    // constant stream of planes all buzzing the same legs at once.
+    const startsParked = index % 3 === 2;
+    // Longer turnaround (45-70 s) also eases the runway: with 10 aircraft
+    // on a single runway, a short turnaround would have a landing or a
+    // takeoff every few seconds, more than one runway can handle.
+    const parkedDuration = 45 + Math.random() * 25;
 
     const agent: AirAgent = {
       object,
@@ -164,17 +270,54 @@ export class RouteTraffic {
       origin,
       destination,
       distance,
-      t: initialT,
-      speed: 165 + Math.random() * 95,
-      cruiseAltitude,
+      t: startsParked ? 0 : 0.3 + ((index * 0.173) % 0.4),
+      speed: startsParked ? 0 : 110,
+      speedFactor: 0.94 + ((index * 37) % 11) / 100,
+      altitude: startsParked ? origin.elevation + 2 : origin.elevation + 2,
+      navRoute,
+      navIndex: 1,
       wingspan: spec.wingspan,
       length: spec.length,
-      placeholder: object.userData.placeholder as THREE.Object3D | undefined
+      placeholder: object.userData.placeholder as THREE.Object3D | undefined,
+      phase: startsParked ? 'parked' : 'airborne',
+      phaseTime: startsParked ? Math.random() * parkedDuration : 0,
+      yaw: startsParked ? Math.PI / 2 : headingToYaw(origin.headingDeg),
+      pitch: 0,
+      parkedDuration,
+      index,
+      taxiFrom: new THREE.Vector3(),
+      taxiTo: new THREE.Vector3(),
+      runwayFor: null,
+      gateId: startsParked && origin.code === HOME_AIRPORT.code ? (index % 8) + 1 : null,
+      stand: standPosition(destination, index),
+      holdingCenter: new THREE.Vector3(),
+      holdingAngle: 0,
+      holdingLevel: 0
     };
 
     this.scene.add(object);
     this.agents.push(agent);
-    this.applyTransform(agent, 0, true);
+    if (startsParked) {
+      // Reserve a real MEX gate if the shared controller exists, so a
+      // TrafficManager aircraft cannot be assigned the same stand.
+      let stand = standPosition(origin, index);
+      if (origin.code === HOME_AIRPORT.code && this.shared) {
+        for (let k = 0; k < HOME_GATE_Z.length; k++) {
+          const gateId = ((index + k) % HOME_GATE_Z.length) + 1;
+          if (this.shared.requestGate(gateId, `route-${index}`)) {
+            agent.gateId = gateId;
+            stand = standForGate(gateId, origin.elevation);
+            break;
+          }
+        }
+      }
+      agent.stand = stand;
+      object.position.copy(stand);
+      object.position.y = origin.elevation + 2;
+      object.rotation.set(0, agent.yaw, 0, 'YXZ');
+    } else {
+      this.placeOnRoute(agent, agent.t);
+    }
   }
 
   /* ---------------------------- model loading --------------------------- */
@@ -205,10 +348,13 @@ export class RouteTraffic {
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
       const cloned = materials.map((material) => {
         const m = material.clone() as THREE.MeshStandardMaterial;
-        if (m.color) m.color.lerp(liveryColor, m.map ? 0.28 : 0.75);
+        // Strong tint: the GLB textures are light grey/white, and a 0.28
+        // blend left them looking blank white. 0.65 keeps the texture
+        // detail but makes the airline colour actually visible.
+        if (m.color) m.color.lerp(liveryColor, m.map ? 0.65 : 0.8);
         // A faint self-lit component keeps airliners from turning into pure
         // black bird-like silhouettes at night.
-        if (m.emissive) m.emissive.copy(m.color).multiplyScalar(0.12);
+        if (m.emissive) m.emissive.copy(m.color).multiplyScalar(0.22);
         m.envMapIntensity = 1.1;
         return m;
       });
@@ -263,52 +409,135 @@ export class RouteTraffic {
     return holder;
   }
 
-  /* ------------------------------- motion ------------------------------- */
+  /* --------------------------- route following -------------------------- */
 
-  private altitudeAt(agent: AirAgent, t: number): number {
-    const clamped = THREE.MathUtils.clamp(t, 0, 1);
-    const arc = Math.sin(Math.PI * clamped);
-    // Ground-to-cruise profile: flat at the runway, steep in the middle. The
-    // aircraft is always visible, so it takes off instead of popping into the
-    // sky at altitude.
-    return (
-      agent.origin.elevation +
-      (agent.destination.elevation - agent.origin.elevation) * clamped +
-      2 +
-      agent.cruiseAltitude * Math.pow(arc, 1.6)
-    );
+  /** Put the aircraft at a fractional position along its node route. */
+  private placeOnRoute(agent: AirAgent, t: number) {
+    const route = agent.navRoute;
+    if (route.length < 2) return;
+    const clamped = THREE.MathUtils.clamp(t, 0, 0.85);
+    const f = clamped * (route.length - 1);
+    const i = Math.min(route.length - 2, Math.floor(f));
+    const frac = f - i;
+    const from = route[i].position;
+    const to = route[i + 1].position;
+    agent.object.position.lerpVectors(from, to, frac);
+    agent.navIndex = i + 1;
+    agent.altitude = agent.object.position.y;
+    agent.speed = route[i + 1].speed;
+    const dir = to.clone().sub(from);
+    agent.yaw = Math.atan2(dir.x, dir.z);
+    agent.t = clamped;
+    agent.object.rotation.set(0, agent.yaw, 0, 'YXZ');
   }
 
-  private applyTransform(agent: AirAgent, dt: number, immediate = false) {
-    const { origin, destination } = agent;
-    const t = agent.t;
+  /**
+   * Fly one frame towards a route node. Returns true when the node is
+   * reached, so the caller can advance to the next one.
+   */
+  private flyToNode(agent: AirAgent, node: AirNode, dt: number): boolean {
+    const target = node.position;
+    const delta = target.clone().sub(agent.object.position);
+    delta.y = 0;
+    const distance = delta.length();
 
-    const x = origin.x + (destination.x - origin.x) * t;
-    const z = origin.z + (destination.z - origin.z) * t;
-    const altitude = this.altitudeAt(agent, t);
+    // Accelerate or slow down towards the speed of the next node, with a
+    // small per-aircraft factor so two flights on the same leg do not fly
+    // in a perfectly locked formation forever.
+    const targetSpeed = node.speed * agent.speedFactor;
+    agent.speed += THREE.MathUtils.clamp(targetSpeed - agent.speed, -6 * dt, 5 * dt);
 
-    const eps = 0.002;
-    const altAhead = this.altitudeAt(agent, THREE.MathUtils.clamp(t + eps, 0, 1));
-    const verticalSpeed = (altAhead - altitude) / (eps * agent.distance);
-    const pitch = THREE.MathUtils.clamp(-Math.atan(verticalSpeed), -0.35, 0.35);
+    const step = Math.max(0.5, agent.speed) * dt;
+    if (distance > 0.001) {
+      const dir = delta.normalize();
+      agent.object.position.addScaledVector(dir, Math.min(step, distance));
+      // The nose always points at the node, so it can never fly sideways.
+      agent.yaw = lerpAngle(agent.yaw, Math.atan2(dir.x, dir.z), Math.min(1, dt * 2));
+    }
 
-    const dirX = destination.x - origin.x;
-    const dirZ = destination.z - origin.z;
-    const yaw = Math.atan2(dirX, dirZ);
+    // Altitude moves towards the node altitude at 12 m/s up / 14 m/s down,
+    // so the aircraft never climbs or drops like a helicopter.
+    const prevAltitude = agent.altitude;
+    agent.altitude += THREE.MathUtils.clamp(target.y - agent.altitude, -14 * dt, 12 * dt);
+    const verticalSpeed = dt > 0 ? (agent.altitude - prevAltitude) / dt : 0;
+    const targetPitch = THREE.MathUtils.clamp(
+      Math.atan2(verticalSpeed, Math.max(1, agent.speed)),
+      -0.15,
+      0.15
+    );
+    agent.pitch = THREE.MathUtils.lerp(agent.pitch, targetPitch, Math.min(1, dt * 2));
 
-    agent.object.position.set(x, altitude, z);
-    agent.object.rotation.set(pitch, yaw, 0, 'YXZ');
+    agent.object.position.y = agent.altitude;
+    agent.object.rotation.set(agent.pitch, agent.yaw, 0, 'YXZ');
     // Never hide the airframe: hiding/revealing was what made aircraft appear
     // out of nowhere near the airports.
     agent.object.visible = true;
-    void dt;
-    void immediate;
+
+    return distance <= step + 1;
   }
 
-  private nextRoute(agent: AirAgent) {
-    // Fly the same leg back instead of teleporting to MEX. The aircraft is at
-    // the destination threshold when this runs, so t=0 keeps it in place and
-    // it climbs out on the return trip.
+  /** Divert to the holding fix of the destination and orbit there. */
+  private beginHolding(agent: AirAgent) {
+    const hold = this.network.get(`HOLD-${agent.destination.code}`);
+    agent.phase = 'holding';
+    agent.phaseTime = 0;
+    agent.runwayFor = null;
+
+    // Pick the lowest stack level free at this destination, so two
+    // aircraft waiting for the same runway never orbit the same circle
+    // at the same altitude.
+    const used = new Set<number>();
+    for (const other of this.agents) {
+      if (other === agent || other.phase !== 'holding') continue;
+      if (other.destination.code !== agent.destination.code) continue;
+      used.add(other.holdingLevel);
+    }
+    let level = 0;
+    while (level < 3 && used.has(level)) level++;
+    agent.holdingLevel = level;
+
+    if (hold) {
+      agent.holdingCenter.copy(hold.position);
+      agent.navRoute = [hold];
+      agent.navIndex = 0;
+    } else {
+      agent.holdingCenter.set(
+        agent.destination.x,
+        agent.destination.elevation + 400,
+        agent.destination.z
+      );
+    }
+    agent.holdingAngle = Math.atan2(
+      agent.object.position.x - agent.holdingCenter.x,
+      agent.object.position.z - agent.holdingCenter.z
+    );
+  }
+
+  /** Touchdown: hand the aircraft over to the rollout phase. */
+  private beginLanding(agent: AirAgent) {
+    agent.phase = 'landing';
+    agent.phaseTime = 0;
+    agent.speed = 65;
+    agent.altitude = agent.destination.elevation + 2;
+    agent.t = 1;
+    agent.object.position.set(
+      agent.destination.x,
+      agent.altitude,
+      agent.destination.z
+    );
+    agent.object.rotation.set(0, agent.yaw, 0, 'YXZ');
+  }
+
+  /**
+   * Start the return leg. Only called after the aircraft has landed,
+   * taxied to a stand and waited out its turnaround — never in mid-air.
+   */
+  private startReturnLeg(agent: AirAgent) {
+    // Leaving the stand frees its MEX gate for another aircraft.
+    if (this.shared && agent.gateId !== null) {
+      this.shared.releaseGate(`route-${agent.index}`);
+      agent.gateId = null;
+    }
     const previousOrigin = agent.origin;
     agent.origin = agent.destination;
     agent.destination = previousOrigin;
@@ -324,9 +553,30 @@ export class RouteTraffic {
         agent.destination.z - agent.origin.z
       )
     );
-    agent.cruiseAltitude = Math.min(3400, Math.max(1100, agent.distance * 0.26));
     agent.t = 0;
-    agent.speed = 165 + Math.random() * 95;
+    agent.speed = 0;
+    agent.altitude = agent.origin.elevation + 2;
+    agent.runwayFor = null;
+    agent.stand = standPosition(agent.destination, agent.index);
+    agent.navRoute =
+      this.network.findFlightRoute(agent.origin.code, agent.destination.code) ?? [];
+    agent.navIndex = 1;
+    agent.parkedDuration = 30 + Math.random() * 20;
+    // Taxi out to a queue spot beside the runway, not to the exact same
+    // point as every other aircraft: two departures would otherwise be
+    // drawn on top of each other while they wait for their takeoff slot.
+    const yaw = headingToYaw(agent.origin.headingDeg);
+    const perpX = Math.cos(yaw);
+    const perpZ = -Math.sin(yaw);
+    const slot = (agent.index % 4) - 1.5;
+    agent.taxiFrom.copy(agent.object.position);
+    agent.taxiTo.set(
+      agent.origin.x + perpX * slot * 45,
+      agent.origin.elevation + 2,
+      agent.origin.z + perpZ * slot * 45
+    );
+    agent.phase = 'taxiOut';
+    agent.phaseTime = 0;
   }
 
   /** Update the single Points cloud that draws all navigation lights. */
@@ -361,16 +611,255 @@ export class RouteTraffic {
 
   update(dt: number) {
     for (const agent of this.agents) {
-      const step = (agent.speed / agent.distance) * dt;
-      agent.t += step;
+      agent.phaseTime += dt;
 
-      if (agent.t >= 1) {
-        // Reached the destination: turn around and fly the return leg.
-        agent.t = 0;
-        this.nextRoute(agent);
+      switch (agent.phase) {
+        case 'airborne': {
+          // The takeoff lock is released once the aircraft has flown past
+          // its departure fix (navIndex >= 2). The landing lock is released
+          // after rollout. Both windows are kept short on purpose: the
+          // runway is the bottleneck, and holding it for the whole
+          // climb/descent would queue every other aircraft for minutes.
+          if (agent.runwayFor === 'takeoff' && agent.navIndex >= 2 && this.shared) {
+            this.shared.runway.release(`route-${agent.index}`);
+            agent.runwayFor = null;
+          }
+
+          const target = agent.navRoute[agent.navIndex];
+          if (!target) {
+            // Defensive: a leg without a route still has to terminate.
+            this.beginLanding(agent);
+            break;
+          }
+
+          // The shared controller models MEX's single runway. Remote
+          // airports have their own runway, so only MEX arrivals queue on
+          // it: otherwise a departure from CUN would block a landing at
+          // MEX even though the two runways are thousands of km apart.
+          if (
+            (target.type === 'final' || target.type === 'runway') &&
+            agent.runwayFor !== 'landing' &&
+            this.shared &&
+            agent.destination.code === HOME_AIRPORT.code
+          ) {
+            if (!this.shared.runway.request(`route-${agent.index}`)) {
+              this.beginHolding(agent);
+              break;
+            }
+            agent.runwayFor = 'landing';
+          }
+
+          if (this.flyToNode(agent, target, dt)) {
+            if (target.type === 'runway' && target.airportCode === agent.destination.code) {
+              this.beginLanding(agent);
+              break;
+            }
+            agent.navIndex = Math.min(agent.navIndex + 1, agent.navRoute.length - 1);
+          }
+          agent.t =
+            agent.navRoute.length > 1 ? agent.navIndex / (agent.navRoute.length - 1) : 0;
+          break;
+        }
+
+        case 'holding': {
+          // Fly to the holding fix first, then orbit it while the runway
+          // is busy. The holding fix is a real node in the air network, so
+          // the aircraft can rejoin the arrival route from it (HOLD -> ARR
+          // -> FINAL -> RUNWAY) as soon as the runway is granted.
+          // Holding stack: up to four levels and four orbit radii, so
+          // aircraft waiting for the same runway never share the same
+          // circle or the same altitude (a real stack is vertically
+          // separated too). The level is assigned when entering the hold.
+          const stack = THREE.MathUtils.clamp(agent.holdingLevel, 0, 3);
+          const orbitRadius = 360 + stack * 100;
+          const stackAltitude = agent.holdingCenter.y + stack * 110;
+          const offset = agent.object.position.clone().sub(agent.holdingCenter);
+          offset.y = 0;
+          const distance = offset.length();
+          const speed = Math.max(60, agent.speed);
+
+          if (distance > orbitRadius + 150) {
+            // Head towards the holding fix, adjusting the orbit angle so
+            // the entry is tangential instead of straight through it.
+            const dir = offset.normalize();
+            const step = Math.min(speed * dt, distance - orbitRadius);
+            agent.object.position.addScaledVector(dir, -step);
+            agent.yaw = lerpAngle(
+              agent.yaw,
+              Math.atan2(-dir.x, -dir.z),
+              Math.min(1, dt * 1.5)
+            );
+            agent.holdingAngle = Math.atan2(
+              agent.object.position.x - agent.holdingCenter.x,
+              agent.object.position.z - agent.holdingCenter.z
+            );
+          } else {
+            agent.holdingAngle += (speed / orbitRadius) * dt;
+            const targetX =
+              agent.holdingCenter.x + Math.sin(agent.holdingAngle) * orbitRadius;
+            const targetZ =
+              agent.holdingCenter.z + Math.cos(agent.holdingAngle) * orbitRadius;
+            // Ease onto the circle instead of teleporting onto it at the
+            // moment the aircraft enters the holding area.
+            const blend = Math.min(1, dt * 2.5);
+            agent.object.position.x += (targetX - agent.object.position.x) * blend;
+            agent.object.position.z += (targetZ - agent.object.position.z) * blend;
+            const tangentYaw = Math.atan2(
+              Math.cos(agent.holdingAngle),
+              -Math.sin(agent.holdingAngle)
+            );
+            agent.yaw = lerpAngle(agent.yaw, tangentYaw, Math.min(1, dt * 1.5));
+          }
+
+          // Climb/descend towards this aircraft's stack altitude at a
+          // limited rate.
+          agent.altitude += THREE.MathUtils.clamp(
+            stackAltitude - agent.altitude,
+            -14 * dt,
+            12 * dt
+          );
+          agent.object.position.y = agent.altitude;
+          agent.speed += THREE.MathUtils.clamp(90 - agent.speed, -6 * dt, 5 * dt);
+          agent.pitch = THREE.MathUtils.lerp(agent.pitch, 0, Math.min(1, dt * 2));
+          agent.object.rotation.set(agent.pitch, agent.yaw, 0, 'YXZ');
+          agent.object.visible = true;
+
+          // Retry every frame: the first holding aircraft to get the
+          // runway rejoins the approach, the rest keep orbiting.
+          if (
+            this.shared &&
+            agent.runwayFor !== 'landing' &&
+            this.shared.runway.request(`route-${agent.index}`)
+          ) {
+            const holdId = `HOLD-${agent.destination.code}`;
+            const route =
+              this.network.findRoute(holdId, `RUNWAY-${agent.destination.code}`) ?? [];
+            if (route.length >= 2) {
+              agent.runwayFor = 'landing';
+              agent.navRoute = route;
+              agent.navIndex = 1;
+              agent.phase = 'airborne';
+              agent.phaseTime = 0;
+              agent.t = 0;
+            } else {
+              // Should never happen with a validated network, but a locked
+              // runway without a route would deadlock the airport.
+              this.shared.runway.release(`route-${agent.index}`);
+            }
+          }
+          break;
+        }
+
+        case 'landing': {
+          // Rollout along the destination runway heading, slowing down.
+          const runwayYaw = headingToYaw(agent.destination.headingDeg);
+          agent.yaw = lerpAngle(agent.yaw, runwayYaw, Math.min(1, dt * 2));
+          agent.pitch = THREE.MathUtils.lerp(agent.pitch, 0, Math.min(1, dt * 2));
+          agent.speed = Math.max(0, agent.speed - 12 * dt);
+          agent.object.position.x += Math.sin(agent.yaw) * agent.speed * dt;
+          agent.object.position.z += Math.cos(agent.yaw) * agent.speed * dt;
+          agent.object.position.y = agent.destination.elevation + 2;
+          agent.object.rotation.set(agent.pitch, agent.yaw, 0, 'YXZ');
+          if (agent.phaseTime > 6 || agent.speed <= 0) {
+            // Clear of the runway: release it, then taxi to a stand.
+            // At MEX, reserve a real gate so no other aircraft (ground
+            // or air traffic) parks on top of this one.
+            if (this.shared && agent.runwayFor === 'landing') {
+              this.shared.runway.release(`route-${agent.index}`);
+              agent.runwayFor = null;
+            }
+            let stand = standPosition(agent.destination, agent.index);
+            if (agent.destination.code === HOME_AIRPORT.code && this.shared) {
+              for (let k = 0; k < HOME_GATE_Z.length; k++) {
+                const gateId = ((agent.index + k) % HOME_GATE_Z.length) + 1;
+                if (this.shared.requestGate(gateId, `route-${agent.index}`)) {
+                  agent.gateId = gateId;
+                  stand = standForGate(gateId, agent.destination.elevation);
+                  break;
+                }
+              }
+            }
+            agent.stand = stand;
+            agent.taxiFrom.copy(agent.object.position);
+            agent.taxiTo.copy(stand);
+            agent.phase = 'taxiIn';
+            agent.phaseTime = 0;
+          }
+          break;
+        }
+
+        case 'taxiIn': {
+          const k = smoothstep(0, 9, agent.phaseTime);
+          agent.object.position.lerpVectors(agent.taxiFrom, agent.taxiTo, k);
+          agent.object.position.y = agent.destination.elevation + 2;
+          agent.yaw = lerpAngle(agent.yaw, Math.PI / 2, Math.min(1, dt * 1.5));
+          agent.pitch = 0;
+          agent.object.rotation.set(0, agent.yaw, 0, 'YXZ');
+          if (agent.phaseTime >= 9) {
+            agent.phase = 'parked';
+            agent.phaseTime = 0;
+          }
+          break;
+        }
+
+        case 'parked': {
+          // Turnaround: the aircraft waits at the stand (unload / load).
+          // It does not move, it does not turn, it does not take off early.
+          // Note: do not touch position.y here — a parked aircraft that
+          // spawned at its origin sits at the origin elevation, not the
+          // destination elevation.
+          agent.object.rotation.set(0, agent.yaw, 0, 'YXZ');
+          if (agent.phaseTime >= agent.parkedDuration) {
+            this.startReturnLeg(agent);
+          }
+          break;
+        }
+
+        case 'taxiOut': {
+          const k = smoothstep(0, 9, agent.phaseTime);
+          agent.object.position.lerpVectors(agent.taxiFrom, agent.taxiTo, k);
+          agent.object.position.y = agent.origin.elevation + 2;
+          agent.yaw = lerpAngle(
+            agent.yaw,
+            headingToYaw(agent.origin.headingDeg),
+            Math.min(1, dt * 1.5)
+          );
+          agent.pitch = 0;
+          agent.object.rotation.set(0, agent.yaw, 0, 'YXZ');
+          if (agent.phaseTime >= 9) {
+            // MEX departures also need the shared runway; remote airports
+            // have their own runway and do not queue on the MEX one.
+            if (
+              this.shared &&
+              agent.origin.code === HOME_AIRPORT.code &&
+              agent.runwayFor !== 'takeoff'
+            ) {
+              if (!this.shared.runway.request(`route-${agent.index}`)) {
+                agent.phaseTime = 9;
+                break;
+              }
+              agent.runwayFor = 'takeoff';
+            }
+            agent.phase = 'airborne';
+            agent.phaseTime = 0;
+            agent.t = 0;
+            agent.speed = 35;
+            // Start the leg on the departure runway: the first thing the
+            // aircraft flies to is the departure fix. Do not snap the
+            // position, so the queue spot is respected (no teleport).
+            agent.navRoute =
+              this.network.findFlightRoute(agent.origin.code, agent.destination.code) ??
+              agent.navRoute;
+            agent.navIndex = 1;
+            const startNode = agent.navRoute[0];
+            agent.altitude = startNode
+              ? startNode.position.y
+              : agent.origin.elevation + 2;
+            agent.object.position.y = agent.altitude;
+          }
+          break;
+        }
       }
-
-      this.applyTransform(agent, dt);
     }
     this.updateNavLights();
   }
@@ -394,6 +883,10 @@ export class RouteTraffic {
     (this.navMaterial.map as THREE.Texture | null)?.dispose();
     this.navMaterial.dispose();
     for (const agent of this.agents) {
+      if (this.shared) {
+        this.shared.runway.release(`route-${agent.index}`);
+        this.shared.releaseGate(`route-${agent.index}`);
+      }
       this.scene.remove(agent.object);
       this.disposeObject(agent.object);
     }
