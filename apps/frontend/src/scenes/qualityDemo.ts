@@ -145,6 +145,14 @@ export function createQualityDemo(
   sunLight.shadow.bias = -0.0004;
   scene.add(sunLight);
 
+  // Night fill. When the sun is below the horizon there is no light source
+  // aimed at the aircraft, so the liveries clamped to black and looked like
+  // they had no textures at all. A cool, shadowless "moon" keeps the
+  // airframes readable without breaking the night mood.
+  const moonLight = new THREE.DirectionalLight(0x9db8e8, 0);
+  moonLight.position.set(-6200, 5400, -9200);
+  scene.add(moonLight);
+
   const airportLights: THREE.PointLight[] = [];
   const beaconLights: THREE.PointLight[] = [];
 
@@ -265,6 +273,7 @@ export function createQualityDemo(
   const elev = Math.sin(((hour - 6) / 12) * Math.PI);
   const daylight = THREE.MathUtils.clamp(elev, 0, 1);
   const twilight = THREE.MathUtils.clamp(1 - Math.abs(elev) * 6, 0, 1);
+  const night = 1 - daylight;
 
   const phi = Math.PI / 2 - Math.asin(THREE.MathUtils.clamp(elev, -1, 1));
   sunPos.setFromSphericalCoords(1, phi, Math.PI * 0.32);
@@ -282,14 +291,16 @@ export function createQualityDemo(
 
   sunLight.intensity = 0.05 + daylight * 2.9;
   sunLight.color.setHSL(0.09, 0.35 * twilight, 0.5 + daylight * 0.5);
-  ambientLight.intensity = 0.08 + daylight * 0.5;
+  // Night floor of ambient + moon: enough to read aircraft liveries and
+  // runway markings from the air, still clearly darker than dusk.
+  moonLight.intensity = night * 0.6;
+  ambientLight.intensity = 0.15 + daylight * 0.43;
   ambientLight.color.setHSL(0.58, 0.35, 0.35 + daylight * 0.55);
-  hemiLight.intensity = 0.06 + daylight * 0.6;
+  hemiLight.intensity = 0.13 + daylight * 0.47;
 
   // Sistema de iluminación dinámica.
   updateLighting(hour);
 
-  const night = 1 - daylight;
   for (const light of airportLights) light.intensity = 20 + night * 260;
   for (const light of beaconLights) light.intensity = 4 + night * 22;
 
@@ -668,6 +679,16 @@ export function createQualityDemo(
               if (m.color && m.color.getHex() === 0x000000 && !m.map) {
                 m.color.set(0xf2f4f7);
               }
+              // Self-lit texture: at night the aircraft must stay readable
+              // (livery, windows, panel lines) instead of turning into a
+              // black silhouette lit by nothing. The emissive map is the
+              // albedo texture at low intensity, so it does not glow by day.
+              if (m.map) {
+                m.emissiveMap = m.map;
+                if (m.emissive) m.emissive.set(0xffffff);
+                m.emissiveIntensity = 0.18;
+                m.needsUpdate = true;
+              }
               m.envMapIntensity = 1.1;
             });
           }
@@ -844,9 +865,12 @@ export function createQualityDemo(
       camera: THREE.PerspectiveCamera;
       controls: OrbitControls;
       textureStreamer: TextureStreamer;
+      renderer: THREE.WebGLRenderer;
       THREE: typeof THREE;
       setCameraMode?: (mode: CameraMode) => void;
       focusAirport?: (x: number, z: number, elevation: number) => void;
+      setTime?: (hour: number) => void;
+      getTime?: () => number;
     };
   }).__sim = {
     trafficManager,
@@ -861,7 +885,10 @@ export function createQualityDemo(
     camera,
     controls,
     textureStreamer,
-    THREE
+    renderer,
+    THREE,
+    setTime: (hour: number) => timeManager.setHour(hour),
+    getTime: () => timeManager.getHour()
   };
 
   // ===== CAMERA =====

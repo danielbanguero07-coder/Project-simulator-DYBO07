@@ -196,10 +196,35 @@ export function pickLivery(spec: FleetSpec): number {
  */
 export function createProceduralAircraft(spec: FleetSpec, livery: number): THREE.Group {
   const group = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ color: livery, roughness: 0.38, metalness: 0.22 });
-  const whiteMat = new THREE.MeshStandardMaterial({ color: 0xe6ebf0, roughness: 0.5, metalness: 0.1 });
-  const darkMat = new THREE.MeshStandardMaterial({ color: 0x24282d, roughness: 0.65 });
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0x16232e, roughness: 0.15, metalness: 0.45 });
+  // A weak self-lit component keeps the procedural fallback readable at
+  // night, matching the GLB treatment (textures/liveries stay visible).
+  const bodyMat = new THREE.MeshStandardMaterial({
+    color: livery,
+    roughness: 0.38,
+    metalness: 0.22,
+    emissive: livery,
+    emissiveIntensity: 0.16
+  });
+  const whiteMat = new THREE.MeshStandardMaterial({
+    color: 0xe6ebf0,
+    roughness: 0.5,
+    metalness: 0.1,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.09
+  });
+  const darkMat = new THREE.MeshStandardMaterial({
+    color: 0x24282d,
+    roughness: 0.65,
+    emissive: 0x3a4048,
+    emissiveIntensity: 0.18
+  });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0x16232e,
+    roughness: 0.15,
+    metalness: 0.45,
+    emissive: 0x1b2c3a,
+    emissiveIntensity: 0.4
+  });
 
   const radius = spec.category === 'wide' ? 3.1 : spec.category === 'cargo' ? 3.3 : spec.category === 'regional' ? 1.5 : 2.1;
   const length = spec.length;

@@ -352,9 +352,17 @@ export class RouteTraffic {
         // blend left them looking blank white. 0.65 keeps the texture
         // detail but makes the airline colour actually visible.
         if (m.color) m.color.lerp(liveryColor, m.map ? 0.65 : 0.8);
-        // A faint self-lit component keeps airliners from turning into pure
-        // black bird-like silhouettes at night.
-        if (m.emissive) m.emissive.copy(m.color).multiplyScalar(0.22);
+        // At night, feed the livery-tinted albedo back as a weak emissive
+        // map: the texture (windows, panels, titles) stays visible instead
+        // of the whole aircraft clipping to a black silhouette.
+        if (m.map) {
+          m.emissiveMap = m.map;
+          if (m.emissive) m.emissive.copy(m.color).multiplyScalar(0.85);
+          m.emissiveIntensity = 0.26;
+          m.needsUpdate = true;
+        } else if (m.emissive) {
+          m.emissive.copy(m.color).multiplyScalar(0.3);
+        }
         m.envMapIntensity = 1.1;
         return m;
       });

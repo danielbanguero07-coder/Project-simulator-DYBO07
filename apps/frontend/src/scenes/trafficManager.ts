@@ -82,7 +82,16 @@ function prepareGlbAircraft(source: THREE.Object3D, spec: FleetSpec, livery: num
         // texture: the GLB textures are light grey/white, and a 0.35 blend
         // left the aircraft looking blank white.
         m.color.lerp(liveryColor, m.map ? 0.65 : 0.8);
-        if (m.emissive) m.emissive.copy(m.color).multiplyScalar(0.15);
+        // Texture-aware night visibility: the albedo map also drives a weak
+        // emissive, so liveries and windows do not disappear after sunset.
+        if (m.map) {
+          m.emissiveMap = m.map;
+          if (m.emissive) m.emissive.copy(m.color).multiplyScalar(0.85);
+          m.emissiveIntensity = 0.26;
+          m.needsUpdate = true;
+        } else if (m.emissive) {
+          m.emissive.copy(m.color).multiplyScalar(0.3);
+        }
       }
       m.envMapIntensity = 1.1;
       return m;
