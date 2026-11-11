@@ -18,10 +18,10 @@ import { TimeManager } from './timeSystem';
 import {
   makeAsphaltCanvas,
   makeConcreteCanvas,
-  makeWindowCanvas,
-  makeJetwayCanvas
+  makeWindowCanvas
 } from './airportTextures';
 import { buildWorld } from './worldGenerator';
+import { JetwaySystem, type JetwayStatus } from './jetwaySystem';
 import { RouteTraffic } from './airRoutes';
 import { SharedAirport } from './runwayControl';
 import { ALL_AIRPORTS, HOME_AIRPORT, ROUTES } from './airports';
@@ -52,6 +52,8 @@ export interface QualityDemoHandle {
   setTime: (hour: number) => void;
   getTime: () => number;
   getPhase: () => string;
+  /** Docking state of the eight passenger boarding bridges. */
+  getJetwayStatuses: () => JetwayStatus[];
 }
 
 type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
@@ -687,33 +689,14 @@ export function createQualityDemo(
     nightIntensity: 1.1
   });
 
-  // Jetways at the four gates
-  const jetwayCanvas = makeJetwayCanvas(1024);
-  const jetwayTex = new THREE.CanvasTexture(jetwayCanvas);
-  jetwayTex.colorSpace = THREE.SRGBColorSpace;
-  jetwayTex.wrapS = jetwayTex.wrapT = THREE.RepeatWrapping;
-  jetwayTex.repeat.set(4, 1);
-  const jetwayMat = new THREE.MeshStandardMaterial({ map: jetwayTex, roughness: 0.6, metalness: 0.25 });
+  // Articulated passenger boarding bridges at the eight terminal gates.
+  // Each bridge swings and telescopes from its rotunda, so it docks to any
+  // aircraft parked on the stand (player or AI) and stows when the stand is
+  // empty.
+  const jetways = new JetwaySystem(scene, AIRPORT_LAYOUT.gateZ);
 
   const gateZ = AIRPORT_LAYOUT.gateZ;
   gateZ.forEach((z) => {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(34, 4.4, 5), jetwayMat);
-    arm.position.set(155, 7, z);
-    arm.castShadow = true;
-    scene.add(arm);
-
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(6, 3.6, 6), jetwayMat);
-    cabin.position.set(170, 7, z);
-    cabin.castShadow = true;
-    scene.add(cabin);
-
-    const support = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.7, 0.7, 7, 8),
-      new THREE.MeshStandardMaterial({ color: 0x6b7280, metalness: 0.6, roughness: 0.5 })
-    );
-    support.position.set(148, 3.5, z);
-    scene.add(support);
-
     // Gate beacon
     const beacon = new THREE.PointLight(0x33aaff, 10, 80, 2);
     beacon.position.set(140, 9, z);
@@ -1200,17 +1183,30 @@ export function createQualityDemo(
     controls.update();
   };
 
+  /** Debug helper: frame one terminal stand and its boarding bridge. */
+  const focusGate = (gateId: number) => {
+    const z = AIRPORT_LAYOUT.gateZ[gateId - 1] ?? AIRPORT_LAYOUT.gateZ[0];
+    applyCameraMode('FREE_ORBIT');
+    controls.target.set(150, 7, z);
+    camera.position.set(198, 24, z + 42);
+    controls.update();
+  };
+
   // Expose the camera helpers on __sim too: useful for inspecting cities,
-  // remote airports and roads without flying there manually.
+  // remote airports, roads and jetways without flying there manually.
   const simGlobal = (window as unknown as {
     __sim?: {
       setCameraMode?: (mode: CameraMode) => void;
       focusAirport?: (x: number, z: number, elevation: number) => void;
+      focusGate?: (gateId: number) => void;
+      getJetwayStatuses?: () => JetwayStatus[];
     };
   }).__sim;
   if (simGlobal) {
     simGlobal.setCameraMode = applyCameraMode;
     simGlobal.focusAirport = focusAirport;
+    simGlobal.focusGate = focusGate;
+    simGlobal.getJetwayStatuses = () => jetways.getStatuses();
   }
 
   const updateCamera = (dt: number) => {
@@ -1290,6 +1286,11 @@ export function createQualityDemo(
     animateLights(dt, aircraft?.position);
 
     trafficManager.update(dt, camera.position);
+    jetways.update(
+      dt,
+      trafficManager.getStandOccupancies(),
+      aircraft ? { position: aircraft.position, yaw: aircraft.rotation.y } : null
+    );
     scheduleManager.update(dt);
     routeTraffic.update(dt);
     worldManager.update(camera.position);
@@ -1335,6 +1336,7 @@ export function createQualityDemo(
       disposed = true;
       resizeObserver.disconnect();
       if (aircraft) disposeObject(aircraft);
+      jetways.dispose();
       composer?.dispose();
       renderer.dispose();
       renderer.domElement.remove();
@@ -1361,6 +1363,7 @@ export function createQualityDemo(
     getCameraMode: () => cameraMode,
     setTime: (h) => timeManager.setHour(h),
     getTime: () => timeManager.getHour(),
-    getPhase: () => timeManager.getCurrentPhase()
+    getPhase: () => timeManager.getCurrentPhase(),
+    getJetwayStatuses: () => jetways.getStatuses()
   };
 }

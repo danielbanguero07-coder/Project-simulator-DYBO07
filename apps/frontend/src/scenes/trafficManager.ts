@@ -418,6 +418,16 @@ export function animateVehicleLights(object: THREE.Object3D, time: number) {
 }
 type AircraftState = 'approach' | 'rollout' | 'taxiIn' | 'parked' | 'boarding' | 'pushback' | 'taxiOut' | 'holding' | 'takeoff' | 'done';
 
+/** Read-only snapshot of an aircraft occupying a stand (for jetways/HUD). */
+export interface StandOccupancy {
+  flightNumber: string;
+  gateId: number;
+  aircraftType: string;
+  position: THREE.Vector3;
+  yaw: number;
+  state: AircraftState;
+}
+
 interface ServiceVehicleAgent {
   object: THREE.Object3D;
   kind: VehicleKind;
@@ -1187,6 +1197,27 @@ export class TrafficManager {
 
   getActiveFlights(): FlightWithState[] {
     return this.aircraft.map((a) => a.flight);
+  }
+
+  /**
+   * Aircraft currently occupying a stand, with the exact world pose. Only the
+   * gate phases are reported: an aircraft is "at the stand" once it has
+   * finished taxiing in and until pushback starts.
+   */
+  getStandOccupancies(): StandOccupancy[] {
+    const result: StandOccupancy[] = [];
+    for (const agent of this.aircraft) {
+      if (agent.state !== 'parked' && agent.state !== 'boarding') continue;
+      result.push({
+        flightNumber: agent.flight.flightNumber,
+        gateId: agent.gateId,
+        aircraftType: agent.flight.aircraftType,
+        position: agent.object.position.clone(),
+        yaw: agent.object.rotation.y,
+        state: agent.state
+      });
+    }
+    return result;
   }
 
   getStats(): TrafficManagerStats {
