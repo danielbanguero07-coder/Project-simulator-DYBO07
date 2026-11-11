@@ -313,3 +313,54 @@ export function makeJetwayCanvas(size: number): HTMLCanvasElement {
   }
   return context.canvas;
 }
+
+/**
+ * Side skin of an articulated jetway tunnel: corrugated panels, a dark ribbon
+ * window at passenger height and a yellow hazard stripe along the skirt. The
+ * texture is repeated along the tunnel, so the panel joints read as ribs.
+ */
+export function makeJetwayTunnelCanvas(size: number): HTMLCanvasElement {
+  const context = makeContext(size);
+  const metal = context.createLinearGradient(0, 0, 0, size);
+  metal.addColorStop(0, '#d3dbe4');
+  metal.addColorStop(0.5, '#b7c2ce');
+  metal.addColorStop(1, '#97a3b0');
+  context.fillStyle = metal;
+  context.fillRect(0, 0, size, size);
+
+  // Corrugation.
+  context.fillStyle = 'rgba(70, 82, 96, 0.16)';
+  for (let x = 0; x < size; x += size / 32) {
+    context.fillRect(x, 0, 2, size);
+  }
+
+  // Panel joints.
+  context.fillStyle = 'rgba(52, 62, 74, 0.55)';
+  for (let x = 0; x < size; x += size / 4) {
+    context.fillRect(x, 0, 3, size);
+  }
+
+  // Ribbon window.
+  const winTop = size * 0.3;
+  const winBottom = size * 0.48;
+  context.fillStyle = '#22303d';
+  context.fillRect(0, winTop, size, winBottom - winTop);
+  context.fillStyle = 'rgba(150, 205, 235, 0.22)';
+  context.fillRect(0, winTop + (winBottom - winTop) * 0.18, size, (winBottom - winTop) * 0.3);
+  context.fillStyle = 'rgba(12, 18, 24, 0.9)';
+  for (let x = 0; x < size; x += size / 8) {
+    context.fillRect(x, winTop, 4, winBottom - winTop);
+  }
+
+  // Skirt and hazard stripe.
+  context.fillStyle = '#7d8895';
+  context.fillRect(0, size * 0.82, size, size * 0.18);
+  context.fillStyle = '#e0b21f';
+  context.fillRect(0, size * 0.86, size, size * 0.06);
+  context.fillStyle = '#2b333d';
+  for (let x = 0; x < size; x += size / 16) {
+    context.fillRect(x, size * 0.86, size / 32, size * 0.06);
+  }
+
+  return context.canvas;
+}
