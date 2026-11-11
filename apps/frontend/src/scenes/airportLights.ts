@@ -187,6 +187,10 @@ export interface TaxiwayLightOptions {
   laneWidth?: number;
   /** Z of the cross taxilanes joining Alpha to Bravo. */
   crossZ?: number[];
+  /** Z where the high-speed exits leave the runway. */
+  exitZ?: number[];
+  /** Longitudinal run of each high-speed exit. */
+  exitDrop?: number;
 }
 
 /** Taxiway centrelines, edge lights and stand lead-in lighting. */
@@ -203,24 +207,29 @@ export function createTaxiwayLights(
   const laneWidth = options.laneWidth ?? 20;
   const crossZ = options.crossZ ?? [];
 
-  // Blue centreline dashes along Alpha, from the south threshold to the
-  // north threshold.
-  const dashPositions: THREE.Vector3[] = [];
-  for (let z = -1100; z <= 1100; z += 8) {
-    dashPositions.push(new THREE.Vector3(alphaX, 0.07, z));
+  // Green centreline lights: Alpha, Bravo, the cross taxilanes and the
+  // high-speed exits. One instanced row, like the real taxiway lighting.
+  const centerlinePositions: THREE.Vector3[] = [];
+  for (let z = -1100; z <= 1100; z += 16) {
+    centerlinePositions.push(new THREE.Vector3(alphaX, 0.1, z));
   }
-  const dashGeometry = new THREE.BoxGeometry(0.28, 0.08, 4.2);
-  const dashMaterial = lampMaterial(LIGHT_COLORS.taxiwayBlue);
-  const dashes = new THREE.InstancedMesh(dashGeometry, dashMaterial, dashPositions.length);
-  const dummy = new THREE.Object3D();
-  dashPositions.forEach((p, i) => {
-    dummy.position.copy(p);
-    dummy.updateMatrix();
-    dashes.setMatrixAt(i, dummy.matrix);
-  });
-  dashes.instanceMatrix.needsUpdate = true;
-  dashes.frustumCulled = false;
-  group.add(dashes);
+  for (let z = -560; z <= 780; z += 16) {
+    centerlinePositions.push(new THREE.Vector3(taxilaneX, 0.1, z));
+  }
+  for (const cz of crossZ) {
+    for (let x = alphaX - 10; x <= taxilaneX + 25; x += 16) {
+      centerlinePositions.push(new THREE.Vector3(x, 0.1, cz));
+    }
+  }
+  const exitZ = options.exitZ ?? [];
+  const exitDrop = options.exitDrop ?? 0;
+  const exitRun = alphaX - 20;
+  for (const z of exitZ) {
+    for (let t = 0.08; t <= 0.94; t += 0.14) {
+      centerlinePositions.push(new THREE.Vector3(20 + exitRun * t, 0.1, z - exitDrop * t));
+    }
+  }
+  group.add(buildLampRow(centerlinePositions, LIGHT_COLORS.centerlineGreen, 0.2));
 
   // Blue edge lights along both sides of the wide Alpha strip.
   const alphaHalf = alphaWidth / 2 - 1;

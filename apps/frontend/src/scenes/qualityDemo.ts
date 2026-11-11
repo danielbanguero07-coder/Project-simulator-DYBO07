@@ -10,6 +10,7 @@ import { WorldManager } from './worldManager';
 import { TrafficManager, type PathNode } from './trafficManager';
 import { buildAirportGroundNetwork, validateGroundNetwork, AIRPORT_LAYOUT } from './groundNetwork';
 import { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights } from './airportLights';
+import { createHomeAirportSigns } from './airportSigns';
 import { updateLighting, animateLights, setPapiGroup, registerEditableLight } from './lightController';
 import { ScheduleManager } from './scheduleManager';
 import { TimeManager } from './timeSystem';
@@ -980,7 +981,9 @@ export function createQualityDemo(
     alphaX: AIRPORT_LAYOUT.taxiwayX,
     alphaWidth: 36,
     taxilaneX: AIRPORT_LAYOUT.taxilaneX,
-    crossZ: AIRPORT_LAYOUT.crossTaxilaneZ
+    crossZ: AIRPORT_LAYOUT.crossTaxilaneZ,
+    exitZ: AIRPORT_LAYOUT.runwayExitZ,
+    exitDrop: AIRPORT_LAYOUT.runwayExitDrop
   });
   scene.add(taxiwayLights);
 
@@ -988,6 +991,9 @@ export function createQualityDemo(
   scene.add(jetwayLights);
 
   scene.add(createHoldLights(holdLightPositions));
+
+  // Taxiway signage: location, direction and runway holding panels.
+  scene.add(createHomeAirportSigns());
 
   scheduleManager.initSchedule();
   trafficManager.seedAmbientTraffic(8);
