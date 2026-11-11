@@ -11,6 +11,7 @@ import { TrafficManager, type PathNode } from './trafficManager';
 import { buildAirportGroundNetwork, validateGroundNetwork, AIRPORT_LAYOUT } from './groundNetwork';
 import { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights } from './airportLights';
 import { createHomeAirportSigns } from './airportSigns';
+import { createApronMarkings } from './apronMarkings';
 import { updateLighting, animateLights, setPapiGroup, registerEditableLight } from './lightController';
 import { ScheduleManager } from './scheduleManager';
 import { TimeManager } from './timeSystem';
@@ -929,6 +930,9 @@ export function createQualityDemo(
     line.position.set((fromX + stand.position.x) / 2, 0.1, stand.position.z);
     scene.add(line);
   });
+
+  // Apron markings: stand numbers, stop bars and platform edges.
+  scene.add(createApronMarkings());
 
   // Fuel farm: two storage tanks + bund wall, at the north end of the
   // service lane so the parallel taxiway stays clear.
