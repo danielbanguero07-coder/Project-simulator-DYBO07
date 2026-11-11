@@ -798,6 +798,121 @@ export function createQualityDemo(
   if (cars.instanceColor) cars.instanceColor.needsUpdate = true;
   scene.add(cars);
 
+  // ===== FIRE STATION (ARFF), HELIPAD & TERMINAL DROP-OFF =====
+  // Small two-bay fire station on the grass south of the apron, facing the
+  // runway with a concrete apparatus apron.
+  const fireStationMat = new THREE.MeshStandardMaterial({ color: 0xd7dbe0, roughness: 0.72 });
+  const fireStation = new THREE.Mesh(new THREE.BoxGeometry(24, 10, 18), fireStationMat);
+  fireStation.position.set(140, 5, -640);
+  fireStation.castShadow = true;
+  fireStation.receiveShadow = true;
+  scene.add(fireStation);
+
+  const fireRoof = new THREE.Mesh(
+    new THREE.BoxGeometry(26, 1.1, 20),
+    new THREE.MeshStandardMaterial({ color: 0x9aa4ad, roughness: 0.85 })
+  );
+  fireRoof.position.set(140, 10.55, -640);
+  fireRoof.castShadow = true;
+  scene.add(fireRoof);
+
+  // Two red apparatus-bay doors on the runway-facing side.
+  const fireDoorMat = new THREE.MeshStandardMaterial({
+    color: 0xb3261e,
+    roughness: 0.55,
+    metalness: 0.15
+  });
+  for (const z of [-636, -644]) {
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.4, 6.4, 6.4), fireDoorMat);
+    door.position.set(127.8, 3.2, z);
+    scene.add(door);
+  }
+
+  const fireApron = new THREE.Mesh(new THREE.PlaneGeometry(34, 30), concreteMat);
+  fireApron.rotation.x = -Math.PI / 2;
+  fireApron.position.set(108, 0.052, -640);
+  fireApron.receiveShadow = true;
+  scene.add(fireApron);
+
+  // Helipad: asphalt circle with the white ring and H, on the grass south of
+  // the apron.
+  const helipad = new THREE.Group();
+  helipad.position.set(230, 0, -720);
+  helipad.name = 'helipad';
+
+  const padBase = new THREE.Mesh(new THREE.CircleGeometry(17, 48), asphaltMat);
+  padBase.rotation.x = -Math.PI / 2;
+  padBase.position.y = 0.05;
+  padBase.receiveShadow = true;
+  helipad.add(padBase);
+
+  const padRing = new THREE.Mesh(new THREE.RingGeometry(13.8, 15, 48), paintMat);
+  padRing.rotation.x = -Math.PI / 2;
+  padRing.position.y = 0.062;
+  helipad.add(padRing);
+
+  const padHBar = new THREE.PlaneGeometry(2.4, 11);
+  for (const dx of [-4.2, 4.2]) {
+    const bar = new THREE.Mesh(padHBar, paintMat);
+    bar.rotation.x = -Math.PI / 2;
+    bar.position.set(dx, 0.063, 0);
+    helipad.add(bar);
+  }
+  const padHCross = new THREE.Mesh(new THREE.PlaneGeometry(8.4, 2.4), paintMat);
+  padHCross.rotation.x = -Math.PI / 2;
+  padHCross.position.y = 0.064;
+  helipad.add(padHCross);
+  scene.add(helipad);
+
+  // Terminal drop-off lane: a curb road on the landside of the terminal,
+  // looped back into the access road at both ends.
+  const dropLane = new THREE.Mesh(new THREE.PlaneGeometry(20, 360), roadMat);
+  dropLane.rotation.x = -Math.PI / 2;
+  dropLane.position.set(268, 0.055, 260);
+  dropLane.receiveShadow = true;
+  scene.add(dropLane);
+
+  for (const z of [85, 435]) {
+    const link = new THREE.Mesh(new THREE.PlaneGeometry(82, 10), roadMat);
+    link.rotation.x = -Math.PI / 2;
+    link.position.set(319, 0.055, z);
+    link.receiveShadow = true;
+    scene.add(link);
+  }
+
+  // Lane edge lines and centre dashes.
+  const lanePaintMat = new THREE.MeshBasicMaterial({ color: 0xcfd6dc });
+  const laneEdgeGeometry = new THREE.BoxGeometry(0.25, 0.02, 340);
+  for (const x of [259.5, 276.5]) {
+    const edge = new THREE.Mesh(laneEdgeGeometry, lanePaintMat);
+    edge.position.set(x, 0.07, 258);
+    scene.add(edge);
+  }
+  const laneDashGeometry = new THREE.BoxGeometry(0.2, 0.02, 4);
+  const laneDashes = new THREE.InstancedMesh(laneDashGeometry, lanePaintMat, 29);
+  const laneDummy = new THREE.Object3D();
+  for (let i = 0; i < 29; i++) {
+    laneDummy.position.set(268, 0.07, 92 + i * 12);
+    laneDummy.updateMatrix();
+    laneDashes.setMatrixAt(i, laneDummy.matrix);
+  }
+  laneDashes.instanceMatrix.needsUpdate = true;
+  scene.add(laneDashes);
+
+  // Cars waiting at the terminal curb.
+  const dropCars = new THREE.InstancedMesh(carGeometry, carMaterial, 8);
+  const dropDummy = new THREE.Object3D();
+  for (let i = 0; i < 8; i++) {
+    dropDummy.position.set(264, 0.85, 112 + i * 44);
+    dropDummy.rotation.y = i % 2 === 0 ? 0 : Math.PI;
+    dropDummy.updateMatrix();
+    dropCars.setMatrixAt(i, dropDummy.matrix);
+    dropCars.setColorAt(i, new THREE.Color(carPalette[(i + 2) % carPalette.length]));
+  }
+  dropCars.instanceMatrix.needsUpdate = true;
+  if (dropCars.instanceColor) dropCars.instanceColor.needsUpdate = true;
+  scene.add(dropCars);
+
   // ===== A320 GLB =====
   let aircraft: THREE.Object3D | null = null;
   const loadA320 = () => {
