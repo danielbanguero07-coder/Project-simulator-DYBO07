@@ -16,6 +16,12 @@ const CATEGORY_MIX: AircraftCategory[] = [
 const PAX_AIRLINES = ['DL', 'AA', 'UA', 'BA', 'AF', 'LH', 'IB', 'LA', 'AM', 'KL'];
 const CARGO_AIRLINES = ['FX', 'UPS', '5X', 'CV', 'KZ', 'QR'];
 
+/**
+ * Hard cap on simultaneous MEX flights. With a single runway, more than
+ * this only builds queues without moving any more aircraft.
+ */
+const MAX_ACTIVE_FLIGHTS = 12;
+
 export class ScheduleManager {
   private flights: Flight[] = [];
   private checkIntervalTimer: number = 0;
@@ -76,13 +82,21 @@ export class ScheduleManager {
   }
 
   private evaluateFlights(currentHour: number) {
+    let active = 0;
+    for (const flight of this.flights) {
+      if (flight.status !== FlightStatus.Scheduled) active++;
+    }
     for (const flight of this.flights) {
       if (flight.status === FlightStatus.Scheduled) {
+        // Admission control: do not launch more flights than the single
+        // runway and the aprons can absorb. The rest stay scheduled.
+        if (active >= MAX_ACTIVE_FLIGHTS) break;
         // If current game time has reached or passed scheduled departure (within a 0.3 hour window)
         const timeDiff = (currentHour - flight.scheduledDeparture + 24) % 24;
-        if (timeDiff >= 0 && timeDiff < 0.4) {
+        if (timeDiff >= 0 && timeDiff < 0.3) {
           const started = this.trafficManager.addFlight(flight);
           if (started) {
+            active++;
             console.log(`[ScheduleManager] Flight ${flight.flightNumber} (${flight.aircraftType}) starting departure/arrival cycle at hour ${currentHour.toFixed(2)}.`);
           } else {
             // All gates busy: keep it scheduled, it will be retried.

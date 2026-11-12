@@ -1106,7 +1106,7 @@ export function createQualityDemo(
   trafficManager.seedAmbientTraffic(8);
 
   // Aircraft flying between the home hub and the remote airports.
-  const routeTraffic = new RouteTraffic(scene, { premium, count: premium ? 10 : 6, shared: sharedAirport, runway: runwaySequencer });
+  const routeTraffic = new RouteTraffic(scene, { premium, count: premium ? 6 : 4, shared: sharedAirport, runway: runwaySequencer });
 
   const networkReport = validateGroundNetwork(trafficManager, network);
   if (networkReport.ok) {

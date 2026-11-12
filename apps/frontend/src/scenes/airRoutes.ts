@@ -121,12 +121,13 @@ const HOME_GATE_IDS = HOME_GATE_STANDS.map((stand) => stand.id);
  * Departure queue spots beside the runway threshold, on taxiway Alpha
  * (x = 84, inside the 36 m of Alpha asphalt). They are 55 m apart and all
  * outside the 46 m runway: before this, route traffic waited at ±22.5 m from
- * the centreline, i.e. on the runway itself.
+ * the centreline, i.e. on the runway itself. The queue is capped at three
+ * aircraft so Alpha never fills up with waiting departures.
  */
 const QUEUE_X = 84;
 const QUEUE_Z_FIRST = 1030;
 const QUEUE_Z_SPACING = 55;
-const QUEUE_SLOTS = 5;
+const QUEUE_SLOTS = 3;
 
 function standForGate(gateId: number, elevation: number): THREE.Vector3 {
   const stand = HOME_GATE_STANDS.find((candidate) => candidate.id === gateId) ?? HOME_GATE_STANDS[0];
@@ -579,8 +580,13 @@ export class RouteTraffic {
   /**
    * Start the return leg. Only called after the aircraft has landed,
    * taxied to a stand and waited out its turnaround — never in mid-air.
+   * Returns false when the MEX departure queue is full: the aircraft then
+   * keeps waiting at its stand instead of piling onto Alpha.
    */
-  private startReturnLeg(agent: AirAgent) {
+  private startReturnLeg(agent: AirAgent): boolean {
+    if (agent.destination.code === HOME_AIRPORT.code && this.mexQueueFull(agent)) {
+      return false;
+    }
     // Leaving the stand frees its MEX gate for another aircraft.
     if (this.shared && agent.gateId !== null) {
       this.shared.releaseGate(`route-${agent.index}`);
@@ -643,6 +649,18 @@ export class RouteTraffic {
     }
     agent.phase = 'taxiOut';
     agent.phaseTime = 0;
+    return true;
+  }
+
+  /** True when three MEX departures are already taxiing or queued. */
+  private mexQueueFull(agent: AirAgent): boolean {
+    let queued = 0;
+    for (const other of this.agents) {
+      if (other === agent) continue;
+      if (other.origin.code !== HOME_AIRPORT.code) continue;
+      if (other.phase === 'taxiOut' || other.phase === 'lineup') queued++;
+    }
+    return queued >= QUEUE_SLOTS;
   }
 
   /** Update the single Points cloud that draws all navigation lights. */
@@ -681,14 +699,25 @@ export class RouteTraffic {
 
       switch (agent.phase) {
         case 'airborne': {
-          // The takeoff lock is released once the aircraft has flown past
-          // its departure fix (navIndex >= 2). The landing lock is released
+          // The takeoff lock is released as soon as the aircraft has flown
+          // ~200 m past the threshold (horizontal distance from the runway
+          // centre drops from 1 150 m to 950 m), not when it reaches the DEP
+          // fix 1 500 m further out: holding it that long kept every other
+          // aircraft waiting ~30 s per takeoff. The landing lock is released
           // after rollout. Both windows are kept short on purpose: the
-          // runway is the bottleneck, and holding it for the whole
-          // climb/descent would queue every other aircraft for minutes.
-          if (agent.runwayFor === 'takeoff' && agent.navIndex >= 2 && this.runwayLock()) {
-            this.runwayLock()!.release(`route-${agent.index}`);
-            agent.runwayFor = null;
+          // runway is the bottleneck.
+          if (agent.runwayFor === 'takeoff' && this.runwayLock()) {
+            const runwayNode = this.network.get(`RUNWAY-${agent.origin.code}`);
+            const horizontal = runwayNode
+              ? Math.hypot(
+                  agent.object.position.x - runwayNode.position.x,
+                  agent.object.position.z - runwayNode.position.z
+                )
+              : 0;
+            if (horizontal > 1300 || horizontal < 950) {
+              this.runwayLock()!.release(`route-${agent.index}`);
+              agent.runwayFor = null;
+            }
           }
 
           const target = agent.navRoute[agent.navIndex];
@@ -702,8 +731,16 @@ export class RouteTraffic {
           // airports have their own runway, so only MEX arrivals queue on
           // it: otherwise a departure from CUN would block a landing at
           // MEX even though the two runways are thousands of km apart.
+          // Claim the landing lock only on short final. Requesting it at the
+          // ARR fix locked the runway for the whole 2 km approach, and the
+          // ground departures queued at HOLD-DEP for a minute per arrival.
+          const runwayNode = this.network.get(`RUNWAY-${agent.destination.code}`);
+          const shortFinal =
+            runwayNode !== undefined &&
+            agent.object.position.distanceTo(runwayNode.position) < 650;
           if (
             (target.type === 'final' || target.type === 'runway') &&
+            shortFinal &&
             agent.runwayFor !== 'landing' &&
             this.runwayLock() &&
             agent.destination.code === HOME_AIRPORT.code
@@ -893,7 +930,10 @@ export class RouteTraffic {
           // destination elevation.
           agent.object.rotation.set(0, agent.yaw, 0, 'YXZ');
           if (agent.phaseTime >= agent.parkedDuration) {
-            this.startReturnLeg(agent);
+            // Queue full: retry in 5 s instead of blocking the stand forever.
+            if (!this.startReturnLeg(agent)) {
+              agent.phaseTime = Math.max(0, agent.parkedDuration - 5);
+            }
           }
           break;
         }

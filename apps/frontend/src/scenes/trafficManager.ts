@@ -429,6 +429,14 @@ const MIN_AIRCRAFT_GAP = 50;
 /** Seconds an aircraft waits on the centreline before starting its roll. */
 const LINEUP_HOLD_SECONDS = 3;
 
+/**
+ * Maximum number of departures taxiing or waiting for the runway at once.
+ * Beyond this the next aircraft stays at its stand: with three aircraft on
+ * Alpha plus the one lining up, additional departures only lengthen the
+ * queue without making the runway any faster.
+ */
+const MAX_DEPARTURE_QUEUE = 3;
+
 /** Read-only snapshot of an aircraft occupying a stand (for jetways/HUD). */
 export interface StandOccupancy {
   flightNumber: string;
@@ -833,6 +841,14 @@ export class TrafficManager {
         }
 
         case 'rollout':
+          // Release the runway as soon as the aircraft turns off onto Alpha
+          // (|x| > 30, clear of the 46 m runway). It used to stay locked
+          // until the aircraft reached its stand, hundreds of metres away,
+          // which kept every other aircraft waiting far too long.
+          if (agent.runwayHeld && this.runwayLock() && Math.abs(agent.object.position.x) > 30) {
+            this.runwayLock()!.release(`tm-${agent.flight.flightNumber}`);
+            agent.runwayHeld = false;
+          }
           if (this.advanceAlongRoute(agent, dt, true)) {
             // Clear of the runway (at the exit): release it for the next
             // landing or departure.
@@ -878,6 +894,9 @@ export class TrafficManager {
             // Bravo merge and crawl past each other; the second one now
             // waits at the stand until the first has reached Alpha.
             if (this.isApronBusy(agent)) break;
+            // Queue cap: keep the aircraft at its stand (doors closed) when
+            // there are already three departures taxiing or holding short.
+            if (this.departureQueueLength() >= MAX_DEPARTURE_QUEUE) break;
             this.finishGateServices(agent);
             const lead = this.findNode(n => n.type === 'apron' && n.gateId === agent.gateId);
             if (lead !== undefined) {
@@ -1276,6 +1295,25 @@ export class TrafficManager {
       Math.sin(agent.yaw) * Math.sin(other.yaw) +
       Math.cos(agent.yaw) * Math.cos(other.yaw);
     return dot < -0.35;
+  }
+
+  /**
+   * Number of departures currently taxiing, queueing or lining up. Used to
+   * cap how many aircraft leave their stands at the same time.
+   */
+  private departureQueueLength(): number {
+    let queued = 0;
+    for (const other of this.aircraft) {
+      if (
+        other.state === 'pushback' ||
+        other.state === 'taxiOut' ||
+        other.state === 'holding' ||
+        other.state === 'lineup'
+      ) {
+        queued++;
+      }
+    }
+    return queued;
   }
 
   /**
