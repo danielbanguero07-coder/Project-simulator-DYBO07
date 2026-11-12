@@ -53,7 +53,12 @@ export class FlightPhysics {
     return Math.max(0, this.groundSampler(x, z)) + this.groundY;
   }
 
-  constructor(initialPosition = new THREE.Vector3(0, 0.32, -1080)) {
+  /**
+   * Spawn on taxiway Alpha (x = 72), not on the runway centreline. The old
+   * default put the player at (0, -1080), i.e. parked on runway 36L, where
+   * AI traffic had to drive around or through the player.
+   */
+  constructor(initialPosition = new THREE.Vector3(72, 0.32, -1050)) {
     this.state = {
       position: initialPosition.clone(),
       rotation: new THREE.Euler(0, 0, 0, 'YXZ'),
