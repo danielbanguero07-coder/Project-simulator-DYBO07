@@ -38,7 +38,7 @@ import { buildAirNetwork, validateAirNetwork, type AirNetwork, type AirNode } fr
  * the rest of the simulation.
  */
 
-type AirPhase = 'airborne' | 'holding' | 'landing' | 'taxiIn' | 'parked' | 'taxiOut';
+type AirPhase = 'airborne' | 'holding' | 'landing' | 'taxiIn' | 'parked' | 'taxiOut' | 'lineup';
 
 interface AirAgent {
   object: THREE.Group;
@@ -75,6 +75,8 @@ interface AirAgent {
   index: number;
   taxiFrom: THREE.Vector3;
   taxiTo: THREE.Vector3;
+  /** Intermediate taxi point: the runway exit onto Alpha (arrivals only). */
+  taxiMid: THREE.Vector3;
   /** What the runway is held for, if this aircraft holds it. */
   runwayFor: 'takeoff' | 'landing' | null;
   /** Gate reserved at MEX, if any (1-8). */
@@ -111,6 +113,17 @@ const HOME_GATE_STANDS: { id: number; z: number }[] = [
   { id: 13, z: -420 }
 ];
 const HOME_GATE_IDS = HOME_GATE_STANDS.map((stand) => stand.id);
+
+/**
+ * Departure queue spots beside the runway threshold, on taxiway Alpha
+ * (x = 84, inside the 36 m of Alpha asphalt). They are 55 m apart and all
+ * outside the 46 m runway: before this, route traffic waited at ±22.5 m from
+ * the centreline, i.e. on the runway itself.
+ */
+const QUEUE_X = 84;
+const QUEUE_Z_FIRST = 1030;
+const QUEUE_Z_SPACING = 55;
+const QUEUE_SLOTS = 5;
 
 function standForGate(gateId: number, elevation: number): THREE.Vector3 {
   const stand = HOME_GATE_STANDS.find((candidate) => candidate.id === gateId) ?? HOME_GATE_STANDS[0];
@@ -300,6 +313,7 @@ export class RouteTraffic {
       index,
       taxiFrom: new THREE.Vector3(),
       taxiTo: new THREE.Vector3(),
+      taxiMid: new THREE.Vector3(),
       runwayFor: null,
       gateId:
         startsParked && origin.code === HOME_AIRPORT.code
@@ -587,18 +601,36 @@ export class RouteTraffic {
     agent.navIndex = 1;
     agent.parkedDuration = 30 + Math.random() * 20;
     // Taxi out to a queue spot beside the runway, not to the exact same
-    // point as every other aircraft: two departures would otherwise be
-    // drawn on top of each other while they wait for their takeoff slot.
+    // point as every other aircraft. At MEX the spots sit on Alpha, outside
+    // the runway; a slot already claimed by another taxiing departure is
+    // skipped so two aircraft never share a stand-in point.
     const yaw = headingToYaw(agent.origin.headingDeg);
-    const perpX = Math.cos(yaw);
-    const perpZ = -Math.sin(yaw);
-    const slot = (agent.index % 4) - 1.5;
-    agent.taxiFrom.copy(agent.object.position);
-    agent.taxiTo.set(
-      agent.origin.x + perpX * slot * 45,
-      agent.origin.elevation + 2,
-      agent.origin.z + perpZ * slot * 45
-    );
+    if (agent.origin.code === HOME_AIRPORT.code) {
+      const used = new Set<number>();
+      for (const other of this.agents) {
+        if (other === agent || other.origin.code !== HOME_AIRPORT.code) continue;
+        if (other.phase !== 'taxiOut') continue;
+        used.add(Math.round((QUEUE_Z_FIRST - other.taxiTo.z) / QUEUE_Z_SPACING));
+      }
+      let slot = 0;
+      while (slot < QUEUE_SLOTS - 1 && used.has(slot)) slot++;
+      agent.taxiFrom.copy(agent.object.position);
+      agent.taxiTo.set(
+        QUEUE_X,
+        agent.origin.elevation + 2,
+        QUEUE_Z_FIRST - slot * QUEUE_Z_SPACING
+      );
+    } else {
+      const perpX = Math.cos(yaw);
+      const perpZ = -Math.sin(yaw);
+      const slot = (agent.index % 4) - 1.5;
+      agent.taxiFrom.copy(agent.object.position);
+      agent.taxiTo.set(
+        agent.origin.x + perpX * slot * 45,
+        agent.origin.elevation + 2,
+        agent.origin.z + perpZ * slot * 45
+      );
+    }
     agent.phase = 'taxiOut';
     agent.phaseTime = 0;
   }
@@ -806,6 +838,18 @@ export class RouteTraffic {
             agent.stand = stand;
             agent.taxiFrom.copy(agent.object.position);
             agent.taxiTo.copy(stand);
+            // At MEX the arrival leaves the runway onto Alpha first, then
+            // taxis to its stand: the old straight line drove the aircraft
+            // up the centreline while the runway had already been released.
+            if (agent.destination.code === HOME_AIRPORT.code) {
+              agent.taxiMid.set(
+                72,
+                agent.destination.elevation + 2,
+                THREE.MathUtils.clamp(agent.object.position.z, -1080, 1080)
+              );
+            } else {
+              agent.taxiMid.copy(agent.object.position);
+            }
             agent.phase = 'taxiIn';
             agent.phaseTime = 0;
           }
@@ -814,7 +858,12 @@ export class RouteTraffic {
 
         case 'taxiIn': {
           const k = smoothstep(0, 9, agent.phaseTime);
-          agent.object.position.lerpVectors(agent.taxiFrom, agent.taxiTo, k);
+          // Two-leg taxi: runway -> Alpha exit -> stand.
+          if (k < 0.5) {
+            agent.object.position.lerpVectors(agent.taxiFrom, agent.taxiMid, k * 2);
+          } else {
+            agent.object.position.lerpVectors(agent.taxiMid, agent.taxiTo, (k - 0.5) * 2);
+          }
           agent.object.position.y = agent.destination.elevation + 2;
           agent.yaw = lerpAngle(agent.yaw, Math.PI / 2, Math.min(1, dt * 1.5));
           agent.pitch = 0;
@@ -853,16 +902,27 @@ export class RouteTraffic {
           if (agent.phaseTime >= 9) {
             // MEX departures also need the shared runway; remote airports
             // have their own runway and do not queue on the MEX one.
-            if (
-              this.shared &&
-              agent.origin.code === HOME_AIRPORT.code &&
-              agent.runwayFor !== 'takeoff'
-            ) {
-              if (!this.shared.runway.request(`route-${agent.index}`)) {
+            if (agent.origin.code === HOME_AIRPORT.code && this.shared) {
+              if (
+                agent.runwayFor !== 'takeoff' &&
+                !this.shared.runway.request(`route-${agent.index}`)
+              ) {
+                // Keep waiting on the queue spot, outside the runway.
                 agent.phaseTime = 9;
                 break;
               }
               agent.runwayFor = 'takeoff';
+              // Cleared: roll from the queue spot onto the threshold
+              // centreline, then start the takeoff run.
+              agent.taxiFrom.copy(agent.object.position);
+              agent.taxiTo.set(
+                agent.origin.x,
+                agent.origin.elevation + 2,
+                agent.origin.z + 1150
+              );
+              agent.phase = 'lineup';
+              agent.phaseTime = 0;
+              break;
             }
             agent.phase = 'airborne';
             agent.phaseTime = 0;
@@ -871,6 +931,37 @@ export class RouteTraffic {
             // Start the leg on the departure runway: the first thing the
             // aircraft flies to is the departure fix. Do not snap the
             // position, so the queue spot is respected (no teleport).
+            agent.navRoute =
+              this.network.findFlightRoute(agent.origin.code, agent.destination.code) ??
+              agent.navRoute;
+            agent.navIndex = 1;
+            const startNode = agent.navRoute[0];
+            agent.altitude = startNode
+              ? startNode.position.y
+              : agent.origin.elevation + 2;
+            agent.object.position.y = agent.altitude;
+          }
+          break;
+        }
+
+        case 'lineup': {
+          // Line up and wait on the threshold, then roll down the runway.
+          // The roll takes 6 s and the aircraft then holds for 3 s.
+          const k = smoothstep(0, 6, Math.min(agent.phaseTime, 6));
+          agent.object.position.lerpVectors(agent.taxiFrom, agent.taxiTo, k);
+          agent.object.position.y = agent.origin.elevation + 2;
+          agent.yaw = lerpAngle(
+            agent.yaw,
+            headingToYaw(agent.origin.headingDeg),
+            Math.min(1, dt * 1.5)
+          );
+          agent.pitch = 0;
+          agent.object.rotation.set(0, agent.yaw, 0, 'YXZ');
+          if (agent.phaseTime >= 9) {
+            agent.phase = 'airborne';
+            agent.phaseTime = 0;
+            agent.t = 0;
+            agent.speed = 35;
             agent.navRoute =
               this.network.findFlightRoute(agent.origin.code, agent.destination.code) ??
               agent.navRoute;

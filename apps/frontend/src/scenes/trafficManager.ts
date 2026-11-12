@@ -416,7 +416,17 @@ export function animateVehicleLights(object: THREE.Object3D, time: number) {
     mesh.visible = pulse > -0.55;
   }
 }
-type AircraftState = 'approach' | 'rollout' | 'taxiIn' | 'parked' | 'boarding' | 'pushback' | 'taxiOut' | 'holding' | 'takeoff' | 'done';
+type AircraftState = 'approach' | 'rollout' | 'taxiIn' | 'parked' | 'boarding' | 'pushback' | 'taxiOut' | 'holding' | 'lineup' | 'takeoff' | 'done';
+
+/**
+ * Minimum nose-to-tail distance in metres between two aircraft taxiing in
+ * the same direction. Aircraft ignore anything further away, so a queue
+ * forms single-file instead of stacking every waiting aircraft on one node.
+ */
+const MIN_AIRCRAFT_GAP = 50;
+
+/** Seconds an aircraft waits on the centreline before starting its roll. */
+const LINEUP_HOLD_SECONDS = 3;
 
 /** Read-only snapshot of an aircraft occupying a stand (for jetways/HUD). */
 export interface StandOccupancy {
@@ -463,6 +473,10 @@ interface AircraftAgent {
   altitude: number;
   /** True while this aircraft holds the shared runway. */
   runwayHeld: boolean;
+  /** Seconds spent waiting for the aircraft ahead to move out of the way. */
+  blockedTimer: number;
+  /** Seconds spent stopped on the centreline (line up and wait). */
+  lineupTimer: number;
 }
 
 function lerpAngle(a: number, b: number, t: number): number {
@@ -721,7 +735,9 @@ export class TrafficManager {
       reverse: false,
       takeoffSpeed: 0,
       altitude: 0,
-      runwayHeld: isArrival && this.shared !== undefined
+      runwayHeld: isArrival && this.shared !== undefined,
+      blockedTimer: 0,
+      lineupTimer: 0
     };
 
     if (isArrival) {
@@ -786,9 +802,7 @@ export class TrafficManager {
           agent.object.position.y = agent.altitude;
           agent.object.rotation.set(0.04, agent.yaw, 0);
           if (agent.object.position.z <= 1150 && agent.altitude <= 0) {
-            const runwayEntry = this.findNode(
-              (n) => n.type === 'runway' && n.position.z > 1000
-            );
+            const runwayEntry = this.runwayEntryNode();
             if (runwayEntry === undefined) {
               this.removeAircraft(agent, i);
               break;
@@ -826,6 +840,7 @@ export class TrafficManager {
           break;
 
         case 'taxiIn':
+          if (this.shouldYield(agent, dt)) break;
           if (this.advanceAlongRoute(agent, dt, true)) {
             agent.state = 'parked';
             agent.timer = 0;
@@ -850,6 +865,11 @@ export class TrafficManager {
           // 35 s loading passengers and cargo, with the service vehicles
           // still at the stand. Total gate time is now ~60 s, not 26 s.
           if (agent.timer > 35) {
+            // One aircraft at a time on the apron lane. Two departures
+            // leaving adjacent stands used to meet head-on at the shared
+            // Bravo merge and crawl past each other; the second one now
+            // waits at the stand until the first has reached Alpha.
+            if (this.isApronBusy(agent)) break;
             this.finishGateServices(agent);
             const lead = this.findNode(n => n.type === 'apron' && n.gateId === agent.gateId);
             if (lead !== undefined) {
@@ -870,12 +890,14 @@ export class TrafficManager {
           if (this.advanceAlongRoute(agent, dt, false)) {
             agent.reverse = false;
             const start = agent.routeIndex >= agent.route.length ? agent.route[agent.route.length - 1] : agent.route[agent.routeIndex];
-            const runwayEntry = this.findNode(n => n.type === 'runway' && n.position.z > 1000);
-            if (runwayEntry === undefined) {
+            // Taxi out to the hold-short point beside the threshold: the
+            // runway is only entered once the shared controller grants it.
+            const hold = this.departureHoldNode();
+            if (hold === undefined) {
               this.removeAircraft(agent, i);
               break;
             }
-            const path = this.findPath(start, runwayEntry, 'aircraft');
+            const path = this.findPath(start, hold, 'aircraft');
             if (!path) {
               this.removeAircraft(agent, i);
               break;
@@ -890,40 +912,47 @@ export class TrafficManager {
           break;
 
         case 'taxiOut':
+          if (this.shouldYield(agent, dt)) break;
           if (this.advanceAlongRoute(agent, dt, true)) {
-            // At the runway threshold: line up and wait if the runway is
-            // busy, instead of rolling onto an aircraft that is landing.
-            if (this.shared && !agent.runwayHeld) {
-              if (!this.shared.runway.request(`tm-${agent.flight.flightNumber}`)) {
-                agent.state = 'holding';
-                agent.timer = 0;
-                agent.speed = 0;
-                break;
-              }
-              agent.runwayHeld = true;
+            // Reached the hold-short point. From here the aircraft either
+            // lines up (runway free) or waits in the queue off the asphalt.
+            agent.speed = 0;
+            if (this.canEnterRunway(agent)) {
+              this.beginLineup(agent);
+            } else {
+              agent.state = 'holding';
+              agent.timer = 0;
             }
-            agent.state = 'takeoff';
-            agent.timer = 0;
-            agent.takeoffSpeed = 30;
-            agent.flight.status = FlightStatus.Takeoff;
-            agent.yaw = Math.PI; // runway heading (towards -Z)
-            console.info(`[Traffic] ${agent.flight.flightNumber} lined up and rolling on RWY18`);
           }
           break;
 
         case 'holding':
-          // Lined up at the threshold, waiting for the runway. Retry
-          // every frame; the runway is released as soon as the other
-          // aircraft clears it, so this wait is normally a few seconds.
-          if (this.shared && this.shared.runway.request(`tm-${agent.flight.flightNumber}`)) {
-            agent.runwayHeld = true;
-            agent.state = 'takeoff';
-            agent.timer = 0;
-            agent.takeoffSpeed = 30;
-            agent.flight.status = FlightStatus.Takeoff;
-            agent.yaw = Math.PI;
-          }
+          // Waiting at the hold-short point, off the runway. Retry every
+          // frame: the runway is released as soon as the other aircraft
+          // clears it, so this wait is normally a few seconds.
+          if (this.canEnterRunway(agent)) this.beginLineup(agent);
           break;
+
+        case 'lineup': {
+          // Roll from the hold-short point onto the centreline, then stop
+          // briefly (line up and wait) before applying takeoff thrust.
+          if (!this.advanceAlongRoute(agent, dt, true)) {
+            agent.lineupTimer = 0;
+            break;
+          }
+          agent.speed = 0;
+          agent.lineupTimer += dt;
+          if (agent.lineupTimer < LINEUP_HOLD_SECONDS) break;
+
+          agent.yaw = Math.PI; // runway heading (towards -Z)
+          agent.object.rotation.set(0, agent.yaw, 0);
+          agent.state = 'takeoff';
+          agent.timer = 0;
+          agent.takeoffSpeed = 30;
+          agent.flight.status = FlightStatus.Takeoff;
+          console.info(`[Traffic] ${agent.flight.flightNumber} lined up and rolling on RWY18`);
+          break;
+        }
 
         case 'takeoff': {
           agent.takeoffSpeed = Math.min(88, agent.takeoffSpeed + 6 * dt);
@@ -1149,6 +1178,130 @@ export class TrafficManager {
   }
 
   /* ------------------------------ helpers ------------------------------ */
+
+  /** Hold-short point where departures queue, outside the runway asphalt. */
+  private departureHoldNode(): number | undefined {
+    return this.findNode((n) => n.label === 'HOLD-DEP');
+  }
+
+  /** Runway node at the departure threshold (north end, z > 1000). */
+  private runwayEntryNode(): number | undefined {
+    return this.findNode((n) => n.type === 'runway' && n.position.z > 1000);
+  }
+
+  /** Asks the shared controller for the runway, once per aircraft. */
+  private canEnterRunway(agent: AircraftAgent): boolean {
+    if (!this.shared || agent.runwayHeld) return true;
+    if (!this.shared.runway.request(`tm-${agent.flight.flightNumber}`)) return false;
+    agent.runwayHeld = true;
+    return true;
+  }
+
+  /** Routes the aircraft from the hold-short point onto the centreline. */
+  private beginLineup(agent: AircraftAgent) {
+    const hold = this.departureHoldNode();
+    const entry = this.runwayEntryNode();
+    const path =
+      hold !== undefined && entry !== undefined
+        ? this.findPath(hold, entry, 'aircraft')
+        : null;
+    if (path && path.length > 1) {
+      agent.route = path;
+      agent.routeIndex = 1;
+    } else {
+      agent.route = [];
+      agent.routeIndex = 0;
+    }
+    agent.state = 'lineup';
+    agent.timer = 0;
+    agent.lineupTimer = 0;
+    agent.speed = 12;
+    agent.flight.status = FlightStatus.Taxiing;
+  }
+
+  /**
+   * Returns the aircraft directly ahead in this one's lane, within
+   * MIN_AIRCRAFT_GAP, or null.
+   */
+  private findAircraftBlocker(agent: AircraftAgent): AircraftAgent | null {
+    if (agent.routeIndex >= agent.route.length) return null;
+    const target = this.nodes[agent.route[agent.routeIndex]].position;
+    const dir = target.clone().sub(agent.object.position);
+    dir.y = 0;
+    if (dir.lengthSq() < 0.01) return null;
+    dir.normalize();
+    const gapSq = MIN_AIRCRAFT_GAP * MIN_AIRCRAFT_GAP;
+    const lateralLimitSq = 18 * 18;
+    for (const other of this.aircraft) {
+      if (other === agent) continue;
+      // Only moving traffic blocks a taxi: aircraft parked or boarding at a
+      // stand are 46 m to the side of Alpha and must not freeze the lane.
+      if (
+        other.state !== 'taxiOut' &&
+        other.state !== 'taxiIn' &&
+        other.state !== 'lineup' &&
+        other.state !== 'rollout' &&
+        other.state !== 'holding'
+      ) {
+        continue;
+      }
+      const away = other.object.position.clone().sub(agent.object.position);
+      away.y = 0;
+      const distanceSq = away.lengthSq();
+      if (distanceSq < 0.01) return other;
+      if (distanceSq > gapSq) continue;
+      // Only an aircraft ahead in the same lane matters. Parallel lanes
+      // (Alpha x = 72 and Bravo x = 95) are 23 m apart, so the lateral
+      // component distinguishes a follower from a neighbour.
+      const forward = away.dot(dir);
+      if (forward <= 0) continue;
+      if (distanceSq - forward * forward > lateralLimitSq) continue;
+      return other;
+    }
+    return null;
+  }
+
+  /** True when two aircraft face each other (head-on taxi conflict). */
+  private isOncoming(agent: AircraftAgent, other: AircraftAgent): boolean {
+    const dot =
+      Math.sin(agent.yaw) * Math.sin(other.yaw) +
+      Math.cos(agent.yaw) * Math.cos(other.yaw);
+    return dot < -0.35;
+  }
+
+  /**
+   * True while another departure is pushing back or still on the apron
+   * taxilane (east of Alpha). Serialises pushback so two aircraft from
+   * adjacent stands never meet head-on at the shared Bravo merge.
+   */
+  private isApronBusy(agent: AircraftAgent): boolean {
+    for (const other of this.aircraft) {
+      if (other === agent) continue;
+      if (other.state === 'pushback') return true;
+      if (other.state === 'taxiOut' && other.object.position.x > 72.5) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Separation yield for taxiing aircraft. A same-direction queue holds
+   * until the leader moves (no creep: 35 m wingspans overlapped when they
+   * inched forward). A head-on conflict is different: after 3 s the
+   * aircraft eases past instead of deadlocking both lanes.
+   */
+  private shouldYield(agent: AircraftAgent, dt: number): boolean {
+    const blocker = this.findAircraftBlocker(agent);
+    if (!blocker) {
+      agent.blockedTimer = 0;
+      return false;
+    }
+    agent.blockedTimer += dt;
+    if (this.isOncoming(agent, blocker) && agent.blockedTimer > 3) {
+      agent.blockedTimer = 0;
+      return false;
+    }
+    return true;
+  }
 
   private findNode(predicate: (node: PathNode) => boolean): number | undefined {
     for (let i = 0; i < this.nodes.length; i++) {

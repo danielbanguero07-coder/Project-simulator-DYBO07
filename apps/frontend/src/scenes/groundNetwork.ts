@@ -35,6 +35,8 @@ export interface GroundNetwork {
   baggageDepot: number;
   runwayThreshold: number;
   runwayEnd: number;
+  /** Hold-short point where departures queue before entering the runway. */
+  departureHold: number;
   layout: typeof AIRPORT_LAYOUT;
 }
 
@@ -146,6 +148,19 @@ export function buildAirportGroundNetwork(tm: TrafficManager): GroundNetwork {
   // Taxiway ends connect back to the runway at both thresholds.
   link(alphaByZ.get(-1100)!, runwayNodes[0]);
   link(alphaByZ.get(1100)!, runwayNodes[runwayNodes.length - 1]);
+
+  // Hold-short point for departures: it sits on Alpha just short of the
+  // runway-end connector, still outside the 46 m of runway asphalt and in
+  // the middle of the taxi lane, so aircraft queue single-file behind each
+  // other. They only enter the runway once the shared controller grants it.
+  // Before this node existed every waiting aircraft stopped on the runway
+  // centreline at (0, 1150) and they all overlapped each other on the runway.
+  const departureHold = tm.addNode(V(taxiwayX, 1112), [], 'holding', undefined, {
+    label: 'HOLD-DEP',
+    maxSpeed: 12
+  });
+  link(departureHold, alphaByZ.get(1100)!);
+  link(departureHold, runwayNodes[runwayNodes.length - 1]);
 
   // Apron taxilane Bravo: spine from the south remote stands to the cargo
   // ramp, with extra nodes where the cross taxilanes meet it.
@@ -259,6 +274,7 @@ export function buildAirportGroundNetwork(tm: TrafficManager): GroundNetwork {
     baggageDepot: baggageDepotNode,
     runwayThreshold: runwayNodes[0],
     runwayEnd: runwayNodes[runwayNodes.length - 1],
+    departureHold,
     layout: AIRPORT_LAYOUT
   };
 }
