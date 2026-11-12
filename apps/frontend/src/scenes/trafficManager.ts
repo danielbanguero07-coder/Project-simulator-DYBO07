@@ -437,6 +437,11 @@ const LINEUP_HOLD_SECONDS = 3;
  */
 const MAX_DEPARTURE_QUEUE = 3;
 
+/** Seconds an aircraft spends at the stand before boarding starts. */
+const TURNAROUND_SECONDS = 25;
+/** Seconds of passenger boarding once the doors are open. */
+const BOARDING_SECONDS = 35;
+
 /** Read-only snapshot of an aircraft occupying a stand (for jetways/HUD). */
 export interface StandOccupancy {
   flightNumber: string;
@@ -445,6 +450,12 @@ export interface StandOccupancy {
   position: THREE.Vector3;
   yaw: number;
   state: AircraftState;
+  /** Passengers on the flight manifest. */
+  passengers: number;
+  /** Passengers already on board (0 while the aircraft is still unloading). */
+  boarded: number;
+  /** Boarding progress, 0 at the first passenger and 1 at the last. */
+  boardingProgress: number;
 }
 
 /** Read-only snapshot of an aircraft occupying a stand (for jetways/HUD). */
@@ -885,10 +896,10 @@ export class TrafficManager {
           break;
 
         case 'parked':
-          // Turnaround at the gate: 25 s unloading / services, then
-          // boarding. The aircraft used to leave after only 14 s, before
-          // the fuel and baggage trucks had even arrived.
-          if (agent.timer > 25) {
+          // Turnaround at the gate: unloading / services, then boarding. The
+          // aircraft used to leave after only 14 s, before the fuel and
+          // baggage trucks had even arrived.
+          if (agent.timer > TURNAROUND_SECONDS) {
             agent.state = 'boarding';
             agent.timer = 0;
             agent.flight.status = FlightStatus.Boarding;
@@ -896,9 +907,9 @@ export class TrafficManager {
           break;
 
         case 'boarding':
-          // 35 s loading passengers and cargo, with the service vehicles
-          // still at the stand. Total gate time is now ~60 s, not 26 s.
-          if (agent.timer > 35) {
+          // Loading passengers and cargo, with the service vehicles still at
+          // the stand. Total gate time is now ~60 s, not 26 s.
+          if (agent.timer > BOARDING_SECONDS) {
             // One aircraft at a time on the apron lane. Two departures
             // leaving adjacent stands used to meet head-on at the shared
             // Bravo merge and crawl past each other; the second one now
@@ -1421,13 +1432,21 @@ export class TrafficManager {
     const result: StandOccupancy[] = [];
     for (const agent of this.aircraft) {
       if (agent.state !== 'parked' && agent.state !== 'boarding') continue;
+      const passengers = Math.max(0, agent.flight.passengers ?? 0);
+      const boarding =
+        agent.state === 'boarding'
+          ? THREE.MathUtils.clamp(agent.timer / BOARDING_SECONDS, 0, 1)
+          : 0;
       result.push({
         flightNumber: agent.flight.flightNumber,
         gateId: agent.gateId,
         aircraftType: agent.flight.aircraftType,
         position: agent.object.position.clone(),
         yaw: agent.object.rotation.y,
-        state: agent.state
+        state: agent.state,
+        passengers,
+        boarded: Math.round(passengers * boarding),
+        boardingProgress: boarding
       });
     }
     return result;

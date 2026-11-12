@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useGame } from '@/store/gameStore';
 import { createQualityDemo as initQualityDemo, type QualityDemoHandle } from '@/scenes/qualityDemo';
 import type { DemoStats } from '@/scenes/qualityDemo';
+import type { BoardingStatus } from '@/scenes/boardingSystem';
 import FlightHUD from '@/components/FlightHUD';
 import { NavigationMap } from '@/components/NavigationMap';
 import { FlightPhysics, type FlightState } from '@/scenes/flightPhysics';
@@ -22,6 +23,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const [flightState, setFlightState] = useState<FlightState>(physicsRef.current.state);
   const [uiVisible] = useState(true);
   const [gameTime, setGameTime] = useState('--:-- GMT');
+  const [boarding, setBoarding] = useState<BoardingStatus[]>([]);
   const [showControlsHelp, setShowControlsHelp] = useState(false);
   const [showMap, setShowMap] = useState(true);
   const timeManagerRef = useRef<TimeManager>(new TimeManager({ timeScale: 1/60, initialHour: 12 }));
@@ -123,6 +125,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
 
     const handle = initQualityDemo(container, 3, (newStats: DemoStats) => {
       setStats(newStats);
+      if (newStats.boarding) setBoarding(newStats.boarding);
     });
     demoRef.current = handle;
     // Let the physics follow the real terrain/airport elevation, so landing at
@@ -230,6 +233,37 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
             <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
           </div>
         </div>
+
+        {/* Boarding counters: one row per gate currently loading people */}
+        {boarding.some((b) => b.active) && (
+          <div className="w-44 rounded-lg border border-white/10 bg-slate-950/60 p-2 font-mono text-[9px] text-slate-300 backdrop-blur-md">
+            <div className="flex justify-between border-b border-white/10 pb-1 mb-1">
+              <span className="font-bold text-white/70">EMBARQUE</span>
+              <span className="text-sky-400">PAX</span>
+            </div>
+            {boarding
+              .filter((b) => b.active)
+              .slice(0, 4)
+              .map((b) => (
+                <div key={b.gateId} className="mt-1 first:mt-0">
+                  <div className="flex justify-between">
+                    <span className="text-slate-300">
+                      P{b.gateId} · {b.flightNumber}
+                    </span>
+                    <span className="text-sky-400">
+                      {b.boarded}/{b.passengers}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 h-1 w-full overflow-hidden rounded bg-slate-700">
+                    <div
+                      className="h-1 rounded bg-sky-400 transition-[width] duration-700"
+                      style={{ width: `${Math.round(b.progress * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
 
         {/* Stats */}
         {uiVisible && (

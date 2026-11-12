@@ -22,6 +22,7 @@ import {
 } from './airportTextures';
 import { buildWorld } from './worldGenerator';
 import { JetwaySystem, type JetwayStatus } from './jetwaySystem';
+import { BoardingSystem, type BoardingStatus } from './boardingSystem';
 import { RouteTraffic } from './airRoutes';
 import { SharedAirport } from './runwayControl';
 import { RunwaySequencer } from './runwaySequencer';
@@ -37,6 +38,8 @@ export interface DemoStats {
   integratedGpu?: boolean;
   renderScale?: number;
   stream?: any;
+  /** Per-gate passenger boarding progress while an aircraft is at the stand. */
+  boarding?: BoardingStatus[];
 }
 
 export interface QualityDemoHandle {
@@ -55,6 +58,8 @@ export interface QualityDemoHandle {
   getPhase: () => string;
   /** Docking state of the eight passenger boarding bridges. */
   getJetwayStatuses: () => JetwayStatus[];
+  /** Passenger boarding progress per gate (empty when nobody is boarding). */
+  getBoardingStatuses: () => BoardingStatus[];
 }
 
 type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
@@ -699,6 +704,9 @@ export function createQualityDemo(
   // aircraft parked on the stand (player or AI) and stows when the stand is
   // empty.
   const jetways = new JetwaySystem(scene, AIRPORT_LAYOUT.gateZ);
+  // Passengers walking to the bridge and baggage carts shuttling around the
+  // stand. Two instanced draw calls total, driven by the boarding progress.
+  const boarding = new BoardingSystem(scene, AIRPORT_LAYOUT.gateZ);
 
   const gateZ = AIRPORT_LAYOUT.gateZ;
   gateZ.forEach((z) => {
@@ -1207,6 +1215,7 @@ export function createQualityDemo(
       focusAirport?: (x: number, z: number, elevation: number) => void;
       focusGate?: (gateId: number) => void;
       getJetwayStatuses?: () => JetwayStatus[];
+      getBoardingStatuses?: () => BoardingStatus[];
     };
   }).__sim;
   if (simGlobal) {
@@ -1214,6 +1223,7 @@ export function createQualityDemo(
     simGlobal.focusAirport = focusAirport;
     simGlobal.focusGate = focusGate;
     simGlobal.getJetwayStatuses = () => jetways.getStatuses();
+    simGlobal.getBoardingStatuses = () => boarding.getStatuses();
   }
 
   const updateCamera = (dt: number) => {
@@ -1294,11 +1304,13 @@ export function createQualityDemo(
 
     runwaySequencer.update(dt);
     trafficManager.update(dt, camera.position);
+    const stands = trafficManager.getStandOccupancies();
     jetways.update(
       dt,
-      trafficManager.getStandOccupancies(),
+      stands,
       aircraft ? { position: aircraft.position, yaw: aircraft.rotation.y } : null
     );
+    boarding.update(dt, stands);
     scheduleManager.update(dt);
     routeTraffic.update(dt);
     worldManager.update(camera.position);
@@ -1317,7 +1329,8 @@ export function createQualityDemo(
           fps: Math.round(statsAccumulator.frames / statsAccumulator.time),
           drawCalls: renderer.info.render.calls,
           triangles: renderer.info.render.triangles,
-          stream: textureStreamer.getStats()
+          stream: textureStreamer.getStats(),
+          boarding: boarding.getStatuses()
         });
       }
       statsAccumulator = { frames: 0, time: 0 };
@@ -1345,6 +1358,7 @@ export function createQualityDemo(
       resizeObserver.disconnect();
       if (aircraft) disposeObject(aircraft);
       jetways.dispose();
+      boarding.dispose();
       composer?.dispose();
       renderer.dispose();
       renderer.domElement.remove();
@@ -1372,6 +1386,7 @@ export function createQualityDemo(
     setTime: (h) => timeManager.setHour(h),
     getTime: () => timeManager.getHour(),
     getPhase: () => timeManager.getCurrentPhase(),
-    getJetwayStatuses: () => jetways.getStatuses()
+    getJetwayStatuses: () => jetways.getStatuses(),
+    getBoardingStatuses: () => boarding.getStatuses()
   };
 }
