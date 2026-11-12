@@ -989,8 +989,11 @@ export class TrafficManager {
             agent.object.position.y = agent.altitude;
             agent.object.rotation.x = THREE.MathUtils.lerp(agent.object.rotation.x, -0.16, dt * 1.5);
           }
-          // Clear of the runway once airborne and climbing: release it.
-          if (agent.runwayHeld && agent.altitude > 300 && this.runwayLock()) {
+          // Clear of the runway once airborne and climbing: release it. The
+          // old threshold (300 m) kept the runway locked ~26 s per takeoff;
+          // at 150 m the aircraft is already well past the threshold and
+          // climbing, so the next departure can line up (~9 s later).
+          if (agent.runwayHeld && agent.altitude > 150 && this.runwayLock()) {
             this.runwayLock()!.release(`tm-${agent.flight.flightNumber}`);
             agent.runwayHeld = false;
           }
