@@ -9,6 +9,7 @@ import {
 } from './fleet';
 import { pickRoute, getAirport, HOME_AIRPORT, type AirportDefinition } from './airports';
 import type { SharedAirport } from './runwayControl';
+import type { RunwayLock } from './runwaySequencer';
 import { buildAirNetwork, validateAirNetwork, type AirNetwork, type AirNode } from './airNetwork';
 
 /**
@@ -95,6 +96,8 @@ export interface RouteTrafficOptions {
   count?: number;
   /** Shared runway/gate controller (one per game, see runwayControl.ts). */
   shared?: SharedAirport;
+  /** Fair FIFO queue for the runway (falls back to the raw lock). */
+  runway?: RunwayLock;
 }
 
 const SPEC_POOL = ['A320', 'B737', 'A321', 'A350', 'B787', 'A380'];
@@ -186,12 +189,14 @@ export class RouteTraffic {
   private navPoints: THREE.Points;
   private navPositions: Float32Array;
   private shared?: SharedAirport;
+  private runwaySequencer?: RunwayLock;
   /** Azimuth route graph built from airports.ts (see airNetwork.ts). */
   private network: AirNetwork;
 
   constructor(scene: THREE.Scene, options: RouteTrafficOptions = {}) {
     this.scene = scene;
     this.shared = options.shared;
+    this.runwaySequencer = options.runway;
     this.premium = options.premium ?? true;
     this.network = buildAirNetwork();
     const report = validateAirNetwork(this.network);
@@ -243,6 +248,11 @@ export class RouteTraffic {
   /** Number of aircraft currently in the traffic system (air + parked). */
   get count(): number {
     return this.agents.length;
+  }
+
+  /** Shared runway: the fair sequencer when available, else the raw lock. */
+  private runwayLock(): RunwayLock | undefined {
+    return this.runwaySequencer ?? this.shared?.runway;
   }
 
   /** Live snapshot for the debug console. */
@@ -676,8 +686,8 @@ export class RouteTraffic {
           // after rollout. Both windows are kept short on purpose: the
           // runway is the bottleneck, and holding it for the whole
           // climb/descent would queue every other aircraft for minutes.
-          if (agent.runwayFor === 'takeoff' && agent.navIndex >= 2 && this.shared) {
-            this.shared.runway.release(`route-${agent.index}`);
+          if (agent.runwayFor === 'takeoff' && agent.navIndex >= 2 && this.runwayLock()) {
+            this.runwayLock()!.release(`route-${agent.index}`);
             agent.runwayFor = null;
           }
 
@@ -695,10 +705,10 @@ export class RouteTraffic {
           if (
             (target.type === 'final' || target.type === 'runway') &&
             agent.runwayFor !== 'landing' &&
-            this.shared &&
+            this.runwayLock() &&
             agent.destination.code === HOME_AIRPORT.code
           ) {
-            if (!this.shared.runway.request(`route-${agent.index}`)) {
+            if (!this.runwayLock()!.request(`route-${agent.index}`, 'arrival')) {
               this.beginHolding(agent);
               break;
             }
@@ -783,9 +793,9 @@ export class RouteTraffic {
           // Retry every frame: the first holding aircraft to get the
           // runway rejoins the approach, the rest keep orbiting.
           if (
-            this.shared &&
+            this.runwayLock() &&
             agent.runwayFor !== 'landing' &&
-            this.shared.runway.request(`route-${agent.index}`)
+            this.runwayLock()!.request(`route-${agent.index}`, 'arrival')
           ) {
             const holdId = `HOLD-${agent.destination.code}`;
             const route =
@@ -800,7 +810,7 @@ export class RouteTraffic {
             } else {
               // Should never happen with a validated network, but a locked
               // runway without a route would deadlock the airport.
-              this.shared.runway.release(`route-${agent.index}`);
+              this.runwayLock()!.release(`route-${agent.index}`);
             }
           }
           break;
@@ -820,8 +830,8 @@ export class RouteTraffic {
             // Clear of the runway: release it, then taxi to a stand.
             // At MEX, reserve a real gate so no other aircraft (ground
             // or air traffic) parks on top of this one.
-            if (this.shared && agent.runwayFor === 'landing') {
-              this.shared.runway.release(`route-${agent.index}`);
+            if (this.runwayLock() && agent.runwayFor === 'landing') {
+              this.runwayLock()!.release(`route-${agent.index}`);
               agent.runwayFor = null;
             }
             let stand = standPosition(agent.destination, agent.index);
@@ -902,10 +912,10 @@ export class RouteTraffic {
           if (agent.phaseTime >= 9) {
             // MEX departures also need the shared runway; remote airports
             // have their own runway and do not queue on the MEX one.
-            if (agent.origin.code === HOME_AIRPORT.code && this.shared) {
+            if (agent.origin.code === HOME_AIRPORT.code && this.runwayLock()) {
               if (
                 agent.runwayFor !== 'takeoff' &&
-                !this.shared.runway.request(`route-${agent.index}`)
+                !this.runwayLock()!.request(`route-${agent.index}`, 'departure')
               ) {
                 // Keep waiting on the queue spot, outside the runway.
                 agent.phaseTime = 9;
@@ -999,7 +1009,7 @@ export class RouteTraffic {
     this.navMaterial.dispose();
     for (const agent of this.agents) {
       if (this.shared) {
-        this.shared.runway.release(`route-${agent.index}`);
+        this.runwayLock()?.release(`route-${agent.index}`);
         this.shared.releaseGate(`route-${agent.index}`);
       }
       this.scene.remove(agent.object);

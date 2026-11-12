@@ -24,6 +24,7 @@ import { buildWorld } from './worldGenerator';
 import { JetwaySystem, type JetwayStatus } from './jetwaySystem';
 import { RouteTraffic } from './airRoutes';
 import { SharedAirport } from './runwayControl';
+import { RunwaySequencer } from './runwaySequencer';
 import { ALL_AIRPORTS, HOME_AIRPORT, ROUTES } from './airports';
 
 export type QualityTier = 2 | 3;
@@ -125,7 +126,11 @@ export function createQualityDemo(
   // it, RouteTraffic and TrafficManager used the same runway and gates
   // independently, and several aircraft ended up on runway 36L at once.
   const sharedAirport = new SharedAirport();
-  const trafficManager = new TrafficManager(scene, sharedAirport);
+  // Fair FIFO queue in front of that lock: the oldest request gets the
+  // runway, ageing stops a stream of arrivals from starving departures, and
+  // a lock held for over 120 s is force-released instead of deadlocking MEX.
+  const runwaySequencer = new RunwaySequencer(sharedAirport.runway);
+  const trafficManager = new TrafficManager(scene, sharedAirport, runwaySequencer);
   const scheduleManager = new ScheduleManager(timeManager, trafficManager);
   const worldManager = new WorldManager(scene);
 
@@ -1101,7 +1106,7 @@ export function createQualityDemo(
   trafficManager.seedAmbientTraffic(8);
 
   // Aircraft flying between the home hub and the remote airports.
-  const routeTraffic = new RouteTraffic(scene, { premium, count: premium ? 10 : 6, shared: sharedAirport });
+  const routeTraffic = new RouteTraffic(scene, { premium, count: premium ? 10 : 6, shared: sharedAirport, runway: runwaySequencer });
 
   const networkReport = validateGroundNetwork(trafficManager, network);
   if (networkReport.ok) {
@@ -1120,6 +1125,7 @@ export function createQualityDemo(
       network: ReturnType<typeof buildAirportGroundNetwork>;
       papi: THREE.Group;
       routeTraffic: RouteTraffic;
+      runwaySequencer: RunwaySequencer;
       world: ReturnType<typeof buildWorld>;
       airports: typeof ALL_AIRPORTS;
       homeAirport: typeof HOME_AIRPORT;
@@ -1140,6 +1146,7 @@ export function createQualityDemo(
     network,
     papi: runwayLighting.papi,
     routeTraffic,
+    runwaySequencer,
     world,
     airports: ALL_AIRPORTS,
     homeAirport: HOME_AIRPORT,
@@ -1285,6 +1292,7 @@ export function createQualityDemo(
     // Animar efectos de luces (PAPI guiado por la posición del avión)
     animateLights(dt, aircraft?.position);
 
+    runwaySequencer.update(dt);
     trafficManager.update(dt, camera.position);
     jetways.update(
       dt,

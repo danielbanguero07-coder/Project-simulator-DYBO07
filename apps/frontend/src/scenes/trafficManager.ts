@@ -3,6 +3,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Flight, FlightStatus } from './flight';
 import { HOME_AIRPORT } from './airports';
 import type { SharedAirport } from './runwayControl';
+import type { RunwayLock } from './runwaySequencer';
 import {
   getFleetSpec,
   pickLivery,
@@ -510,8 +511,15 @@ export class TrafficManager {
 
   constructor(
     private scene: THREE.Scene,
-    private shared?: SharedAirport
+    private shared?: SharedAirport,
+    /** Fair FIFO queue for the shared runway (falls back to the raw lock). */
+    private runwaySequencer?: RunwayLock
   ) {}
+
+  /** Shared runway: the fair sequencer when available, else the raw lock. */
+  private runwayLock(): RunwayLock | undefined {
+    return this.runwaySequencer ?? this.shared?.runway;
+  }
 
   /* --------------------------- aircraft models --------------------------- */
 
@@ -709,7 +717,7 @@ export class TrafficManager {
     // An arrival needs the runway now: if another aircraft is using it,
     // do not spawn at all — the schedule retries in a few seconds, and
     // the aircraft appears on a clear final instead of on top of traffic.
-    if (isArrival && this.shared && !this.shared.runway.request(`tm-${flight.flightNumber}`)) {
+    if (isArrival && this.runwayLock() && !this.runwayLock()!.request(`tm-${flight.flightNumber}`, 'arrival')) {
       return false;
     }
     const gateNodeIndex = gate.nodeIndex;
@@ -828,8 +836,8 @@ export class TrafficManager {
           if (this.advanceAlongRoute(agent, dt, true)) {
             // Clear of the runway (at the exit): release it for the next
             // landing or departure.
-            if (agent.runwayHeld && this.shared) {
-              this.shared.runway.release(`tm-${agent.flight.flightNumber}`);
+            if (agent.runwayHeld && this.runwayLock()) {
+              this.runwayLock()!.release(`tm-${agent.flight.flightNumber}`);
               agent.runwayHeld = false;
             }
             agent.state = 'taxiIn';
@@ -963,8 +971,8 @@ export class TrafficManager {
             agent.object.rotation.x = THREE.MathUtils.lerp(agent.object.rotation.x, -0.16, dt * 1.5);
           }
           // Clear of the runway once airborne and climbing: release it.
-          if (agent.runwayHeld && agent.altitude > 300 && this.shared) {
-            this.shared.runway.release(`tm-${agent.flight.flightNumber}`);
+          if (agent.runwayHeld && agent.altitude > 300 && this.runwayLock()) {
+            this.runwayLock()!.release(`tm-${agent.flight.flightNumber}`);
             agent.runwayHeld = false;
           }
           // Fly away from the airport before disappearing: the old limit
@@ -1191,8 +1199,9 @@ export class TrafficManager {
 
   /** Asks the shared controller for the runway, once per aircraft. */
   private canEnterRunway(agent: AircraftAgent): boolean {
-    if (!this.shared || agent.runwayHeld) return true;
-    if (!this.shared.runway.request(`tm-${agent.flight.flightNumber}`)) return false;
+    const lock = this.runwayLock();
+    if (!lock || agent.runwayHeld) return true;
+    if (!lock.request(`tm-${agent.flight.flightNumber}`, 'departure')) return false;
     agent.runwayHeld = true;
     return true;
   }
@@ -1329,12 +1338,12 @@ export class TrafficManager {
     this.scene.remove(agent.object);
     disposeObject(agent.object);
     this.gateOccupancy.delete(agent.gateId);
-    if (this.shared) {
-      if (agent.runwayHeld) {
-        this.shared.runway.release(`tm-${agent.flight.flightNumber}`);
+    if (this.shared || this.runwaySequencer) {
+      if (agent.runwayHeld && this.runwayLock()) {
+        this.runwayLock()!.release(`tm-${agent.flight.flightNumber}`);
         agent.runwayHeld = false;
       }
-      this.shared.releaseGate(`tm-${agent.flight.flightNumber}`);
+      this.shared?.releaseGate(`tm-${agent.flight.flightNumber}`);
     }
     this.finishGateServices(agent);
     this.aircraft.splice(index, 1);
