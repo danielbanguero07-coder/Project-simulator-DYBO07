@@ -447,6 +447,16 @@ export interface StandOccupancy {
   state: AircraftState;
 }
 
+/** Read-only snapshot of an aircraft occupying a stand (for jetways/HUD). */
+export interface StandOccupancy {
+  flightNumber: string;
+  gateId: number;
+  aircraftType: string;
+  position: THREE.Vector3;
+  yaw: number;
+  state: AircraftState;
+}
+
 interface ServiceVehicleAgent {
   object: THREE.Object3D;
   kind: VehicleKind;
