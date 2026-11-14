@@ -24,6 +24,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const [uiVisible] = useState(true);
   const [gameTime, setGameTime] = useState('--:-- GMT');
   const [boarding, setBoarding] = useState<BoardingStatus[]>([]);
+  const [tower, setTower] = useState<DemoStats['runway']>(undefined);
   const [showControlsHelp, setShowControlsHelp] = useState(false);
   const [showMap, setShowMap] = useState(true);
   const [showRadial, setShowRadial] = useState(false);
@@ -159,6 +160,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     const handle = initQualityDemo(container, 3, (newStats: DemoStats) => {
       setStats(newStats);
       if (newStats.boarding) setBoarding(newStats.boarding);
+      if (newStats.runway) setTower(newStats.runway);
     });
     demoRef.current = handle;
     // Let the physics follow the real terrain/airport elevation, so landing at
@@ -201,6 +203,15 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
       demoRef.current = null;
     };
   }, []);
+
+  const towerHolder = tower?.holder
+    ? tower.holder.replace(/^tm-/, '').replace(/^route-/, 'RUTA ')
+    : null;
+  const towerState = !tower?.holder
+    ? 'LIBRE'
+    : tower.holderUse === 'arrival'
+      ? 'ATERRIZAJE'
+      : 'DESPEGUE';
 
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-slate-950 font-sans text-slate-100 select-none">
@@ -348,6 +359,33 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
             <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
           </div>
         </div>
+
+        {/* Simulated tower: who owns runway 36L right now */}
+        {tower && (
+          <div className="w-44 rounded-lg border border-white/10 bg-slate-950/60 p-2 font-mono text-[9px] text-slate-300 backdrop-blur-md">
+            <div className="flex justify-between border-b border-white/10 pb-1 mb-1">
+              <span className="font-bold text-white/70">TORRE · RWY 36L</span>
+              <span
+                className={
+                  tower.holder
+                    ? 'text-amber-400'
+                    : 'text-emerald-400'
+                }
+              >
+                {towerState}
+              </span>
+            </div>
+            <div className="flex justify-between text-slate-400">
+              <span className="truncate">{towerHolder ?? 'Pista despejada'}</span>
+              <span>{tower.queue > 0 ? `${tower.queue} en espera` : 'sin cola'}</span>
+            </div>
+            {tower.holder && (
+              <div className="mt-0.5 text-right text-slate-500">
+                {Math.round(tower.heldFor)} s de ocupación
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Boarding counters: one row per gate currently loading people */}
         {boarding.some((b) => b.active) && (

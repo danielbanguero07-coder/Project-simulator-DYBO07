@@ -40,6 +40,13 @@ export interface DemoStats {
   stream?: any;
   /** Per-gate passenger boarding progress while an aircraft is at the stand. */
   boarding?: BoardingStatus[];
+  /** Live runway occupancy, as the simulated tower would see it. */
+  runway?: {
+    holder: string | null;
+    holderUse: 'departure' | 'arrival' | null;
+    heldFor: number;
+    queue: number;
+  };
 }
 
 export interface QualityDemoHandle {
@@ -1327,12 +1334,19 @@ export function createQualityDemo(
     statsAccumulator.time += dt;
     if (statsAccumulator.time >= 1) {
       if (onStats) {
+        const runwaySnapshot = runwaySequencer.snapshot();
         onStats({
           fps: Math.round(statsAccumulator.frames / statsAccumulator.time),
           drawCalls: renderer.info.render.calls,
           triangles: renderer.info.render.triangles,
           stream: textureStreamer.getStats(),
-          boarding: boarding.getStatuses()
+          boarding: boarding.getStatuses(),
+          runway: {
+            holder: runwaySnapshot.holder,
+            holderUse: runwaySnapshot.holderUse,
+            heldFor: runwaySnapshot.heldFor,
+            queue: runwaySnapshot.queue.length
+          }
         });
       }
       statsAccumulator = { frames: 0, time: 0 };
