@@ -1389,10 +1389,13 @@ export function createQualityDemo(
     animateLights(dt, aircraft?.position);
 
     runwaySequencer.update(dt);
+    // Reserve the player's stand before the traffic manager assigns gates,
+    // so no AI aircraft spawns on top of the player or steals their jetway.
+    const playerGate = aircraft ? nearestStand(aircraft.position) : null;
+    trafficManager.setPlayerGate(playerGate);
     trafficManager.update(dt, camera.position);
     const stands = trafficManager.getStandOccupancies();
     // Track the player's stand and advance their authorised boarding.
-    const playerGate = aircraft ? nearestStand(aircraft.position) : null;
     if (playerGate === null && playerGround.gateId !== null) {
       playerGround.gateId = null;
       playerGround.boarding = false;

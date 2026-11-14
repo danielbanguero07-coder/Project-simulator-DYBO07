@@ -533,6 +533,8 @@ export class TrafficManager {
   private vehicles: ServiceVehicleAgent[] = [];
   private aircraft: AircraftAgent[] = [];
   private gateOccupancy = new Map<number, string>();
+  /** Stand reserved by the player's aircraft, so AI never spawns on top of it. */
+  private playerGateId: number | null = null;
   /** One load per GLB path, shared by every aircraft of that type. */
   private glbCache = new Map<string, Promise<THREE.Object3D>>();
   /** Accumulated sim time used to pulse vehicle beacons. */
@@ -548,6 +550,21 @@ export class TrafficManager {
   /** Shared runway: the fair sequencer when available, else the raw lock. */
   private runwayLock(): RunwayLock | undefined {
     return this.runwaySequencer ?? this.shared?.runway;
+  }
+
+  /**
+   * Reserves the stand the player is parked on. AI aircraft and route traffic
+   * check the shared gate controller before claiming a stand, so nobody
+   * spawns inside the player's aircraft and no jetway is taken away from it.
+   */
+  setPlayerGate(gateId: number | null) {
+    if (this.playerGateId !== gateId) {
+      if (this.playerGateId !== null) this.shared?.releaseGate('player');
+      this.playerGateId = gateId;
+    }
+    // Keep retrying while another aircraft still owns the gate: as soon as it
+    // releases the stand, the player's reservation takes over.
+    if (gateId !== null) this.shared?.requestGate(gateId, 'player');
   }
 
   /* --------------------------- aircraft models --------------------------- */
@@ -1386,6 +1403,8 @@ export class TrafficManager {
       const node = this.nodes[i];
       if (node.type !== 'gate' || node.gateId === undefined) continue;
       if (allowedGateIds && !allowedGateIds.includes(node.gateId)) continue;
+      // Never give an AI aircraft the stand where the player is parked.
+      if (node.gateId === this.playerGateId) continue;
       if (this.gateOccupancy.has(node.gateId)) continue;
       // Also free in the shared controller: a RouteTraffic aircraft may
       // already be parked at this gate even though this manager did not

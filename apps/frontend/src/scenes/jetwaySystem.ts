@@ -367,16 +367,19 @@ export class JetwaySystem {
     this.elapsed += dt;
 
     const targets = new Map<number, THREE.Vector3>();
-    for (const aircraft of aiAircraft) {
-      const gate = JetwaySystem.playerGate(aircraft.position, aircraft.yaw, this.gateZ);
-      if (gate === null) continue;
-      targets.set(gate, JetwaySystem.doorPosition(aircraft.position, aircraft.yaw));
-    }
+    // The player's aircraft always wins a stand: if an AI aircraft is somehow
+    // still parked on the same gate, the bridge docks to the player instead
+    // of being taken away from them.
     if (player) {
       const gate = JetwaySystem.playerGate(player.position, player.yaw, this.gateZ);
-      if (gate !== null && !targets.has(gate)) {
+      if (gate !== null) {
         targets.set(gate, JetwaySystem.doorPosition(player.position, player.yaw));
       }
+    }
+    for (const aircraft of aiAircraft) {
+      const gate = JetwaySystem.playerGate(aircraft.position, aircraft.yaw, this.gateZ);
+      if (gate === null || targets.has(gate)) continue;
+      targets.set(gate, JetwaySystem.doorPosition(aircraft.position, aircraft.yaw));
     }
 
     const smoothing = 1 - Math.exp(-4.5 * dt);
