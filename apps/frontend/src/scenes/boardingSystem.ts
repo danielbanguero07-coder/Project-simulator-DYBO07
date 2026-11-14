@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import type { StandOccupancy } from './trafficManager';
 
 /**
  * Passenger boarding activity at the eight terminal stands.
@@ -26,6 +25,26 @@ export interface BoardingStatus {
   progress: number;
   /** True while passengers are actually walking to the aircraft. */
   active: boolean;
+  /** True while baggage carts are shuttling around the stand. */
+  baggage: boolean;
+}
+
+/**
+ * One gate's activity for a frame. `StandOccupancy` satisfies it, and the
+ * player's own aircraft is fed in with the same shape so the same crowds and
+ * carts serve both AI and player flights.
+ */
+export interface BoardingActivityInput {
+  gateId: number;
+  flightNumber: string;
+  passengers: number;
+  boarded: number;
+  boardingProgress: number;
+  state: string;
+  /** Override for passenger flow (defaults to `state === 'boarding'`). */
+  showPassengers?: boolean;
+  /** Override for baggage carts (defaults to the passenger flag). */
+  showBaggage?: boolean;
 }
 
 const PASSENGERS_PER_GATE = 8;
@@ -186,9 +205,9 @@ export class BoardingSystem {
    * Advances the passenger activity. `occupancies` is the traffic manager's
    * per-stand snapshot; only gates in `boarding` get walkers and carts.
    */
-  update(dt: number, occupancies: StandOccupancy[]): void {
+  update(dt: number, occupancies: BoardingActivityInput[]): void {
     this.elapsed += dt;
-    const byGate = new Map<number, StandOccupancy>();
+    const byGate = new Map<number, BoardingActivityInput>();
     for (const occupancy of occupancies) byGate.set(occupancy.gateId, occupancy);
 
     this.statuses = [];
@@ -197,8 +216,10 @@ export class BoardingSystem {
     for (let i = 0; i < this.walkers.length; i++) {
       const walker = this.walkers[i];
       const occupancy = byGate.get(walker.gateId);
-      const active = occupancy?.state === 'boarding';
-      if (!active) {
+      const active =
+        occupancy !== undefined &&
+        (occupancy.showPassengers ?? occupancy.state === 'boarding');
+      if (!active || !occupancy) {
         this.hide(this.passengerMesh, i);
         continue;
       }
@@ -226,17 +247,23 @@ export class BoardingSystem {
     for (let i = 0; i < this.carts.length; i++) {
       const cart = this.carts[i];
       const occupancy = byGate.get(cart.gateId);
-      const active = occupancy?.state === 'boarding';
-      if (!active) {
+      const passengerFlow =
+        occupancy !== undefined &&
+        (occupancy.showPassengers ?? occupancy.state === 'boarding');
+      const active =
+        occupancy !== undefined &&
+        (occupancy.showBaggage ?? passengerFlow);
+      if (!active || !occupancy) {
         this.hide(this.cartMesh, i);
         continue;
       }
 
-      const progress = occupancy.boarded / Math.max(1, occupancy.passengers);
       const z0 = this.gateZ[cart.gateId - 1];
       // Shuttle between the service lane and the aircraft, ping-ponging so
-      // the cart is always moving while the gate is loading.
-      const phase = (progress * 2.4 + cart.gateId * 0.13) % 1;
+      // the cart is always moving while the gate is being serviced. Driven by
+      // elapsed time, not boarding progress, so baggage can be handled on its
+      // own even when no passenger is walking.
+      const phase = (this.elapsed * 0.14 + cart.gateId * 0.13) % 1;
       const t = phase < 0.5 ? phase * 2 : 1 - (phase - 0.5) * 2;
       const start = new THREE.Vector3(163, 0.1, z0 + 6.5);
       const end = new THREE.Vector3(147, 0.1, z0 + 6.5);
@@ -252,14 +279,16 @@ export class BoardingSystem {
     for (let gate = 1; gate <= this.gateZ.length; gate++) {
       const occupancy = byGate.get(gate);
       if (!occupancy) continue;
-      const active = occupancy.state === 'boarding';
+      const active = occupancy.showPassengers ?? occupancy.state === 'boarding';
+      const baggage = occupancy.showBaggage ?? active;
       this.statuses.push({
         gateId: gate,
         flightNumber: occupancy.flightNumber,
         passengers: occupancy.passengers,
         boarded: occupancy.boarded,
         progress: occupancy.boarded / Math.max(1, occupancy.passengers),
-        active
+        active,
+        baggage
       });
     }
   }

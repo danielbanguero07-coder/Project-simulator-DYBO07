@@ -25,6 +25,9 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const [gameTime, setGameTime] = useState('--:-- GMT');
   const [boarding, setBoarding] = useState<BoardingStatus[]>([]);
   const [tower, setTower] = useState<DemoStats['runway']>(undefined);
+  const [ground, setGround] = useState<DemoStats['ground']>(undefined);
+  const [serviceMsg, setServiceMsg] = useState<string | null>(null);
+  const serviceTimer = useRef<number | null>(null);
   const [showControlsHelp, setShowControlsHelp] = useState(false);
   const [showMap, setShowMap] = useState(true);
   const [showRadial, setShowRadial] = useState(false);
@@ -46,6 +49,27 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const focusNextGate = useCallback(() => {
     radialGateRef.current = (radialGateRef.current % 8) + 1;
     demoRef.current?.focusGate(radialGateRef.current);
+  }, []);
+
+  const toggleGround = useCallback((kind: 'boarding' | 'baggage') => {
+    const result = demoRef.current?.toggleGroundService(kind);
+    if (!result || !result.ok) {
+      setServiceMsg('Acércate a una puerta para dar servicio');
+    } else {
+      setServiceMsg(
+        `${kind === 'boarding' ? 'Embarque' : 'Maletas'} ${
+          result.enabled ? 'permitido' : 'cancelado'
+        } · Puerta ${result.gate}`
+      );
+    }
+    if (serviceTimer.current !== null) window.clearTimeout(serviceTimer.current);
+    serviceTimer.current = window.setTimeout(() => setServiceMsg(null), 3500);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (serviceTimer.current !== null) window.clearTimeout(serviceTimer.current);
+    };
   }, []);
 
   // Keyboard controls listener for A320 Flight (WASD / Arrows / Shift / Ctrl / G / F)
@@ -161,6 +185,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
       setStats(newStats);
       if (newStats.boarding) setBoarding(newStats.boarding);
       if (newStats.runway) setTower(newStats.runway);
+      if (newStats.ground) setGround(newStats.ground);
     });
     demoRef.current = handle;
     // Let the physics follow the real terrain/airport elevation, so landing at
@@ -267,7 +292,27 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
 
       {/* Radial aircraft menu (V opens/closes, Esc closes) */}
       {showRadial && (() => {
-        const actions = [
+        const actions: Array<{
+          icon: string;
+          label: string;
+          hint: string;
+          active?: boolean;
+          run: () => void;
+        }> = [
+          {
+            icon: '🧑‍🤝‍🧑',
+            label: 'Embarque',
+            hint: ground?.boarding ? 'Cancelar embarque' : 'Permitir embarque',
+            active: ground?.boarding === true,
+            run: () => toggleGround('boarding')
+          },
+          {
+            icon: '🧳',
+            label: 'Maletas',
+            hint: ground?.baggage ? 'Cancelar maletas' : 'Permitir maletas',
+            active: ground?.baggage === true,
+            run: () => toggleGround('baggage')
+          },
           {
             icon: '🚀',
             label: 'TOGA',
@@ -335,7 +380,13 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
                       setShowRadial(false);
                     }}
                     className="absolute flex h-[74px] w-[74px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/15 bg-slate-900/85 text-slate-200 shadow-lg transition hover:border-sky-400/60 hover:bg-slate-800 active:scale-95"
-                    style={{ left: x, top: y }}
+                    style={{
+                      left: x,
+                      top: y,
+                      ...(action.active
+                        ? { borderColor: 'rgba(52, 211, 153, 0.75)' }
+                        : {})
+                    }}
                   >
                     <span className="text-lg leading-none">{action.icon}</span>
                     <span className="font-mono text-[9px] font-bold">{action.label}</span>
@@ -386,6 +437,49 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
             )}
           </div>
         )}
+
+        {/* Ground services the player can authorise from the radial menu */}
+        <div className="w-44 rounded-lg border border-white/10 bg-slate-950/60 p-2 font-mono text-[9px] text-slate-300 backdrop-blur-md">
+          <div className="flex justify-between border-b border-white/10 pb-1 mb-1">
+            <span className="font-bold text-white/70">SERVICIOS</span>
+            <span className={ground?.gate ? 'text-sky-400' : 'text-slate-500'}>
+              {ground?.gate ? `PUERTA ${ground.gate}` : 'SIN PUERTA'}
+            </span>
+          </div>
+          <div className="flex gap-1">
+            <span
+              className={`flex-1 rounded px-1 py-0.5 text-center ${
+                ground?.boarding
+                  ? 'bg-emerald-500/20 text-emerald-300'
+                  : 'bg-slate-800/80 text-slate-500'
+              }`}
+            >
+              EMBARQUE
+            </span>
+            <span
+              className={`flex-1 rounded px-1 py-0.5 text-center ${
+                ground?.baggage
+                  ? 'bg-amber-500/20 text-amber-300'
+                  : 'bg-slate-800/80 text-slate-500'
+              }`}
+            >
+              MALETAS
+            </span>
+          </div>
+          {!ground?.gate && (
+            <div className="mt-1 text-[8px] leading-tight text-slate-500">
+              Aparca en una puerta y pulsa V para dar servicio
+            </div>
+          )}
+          {ground?.gate !== null && ground?.gate !== undefined && ground.boarding && (
+            <div className="mt-1 h-1 w-full overflow-hidden rounded bg-slate-700">
+              <div
+                className="h-1 rounded bg-emerald-400 transition-[width] duration-700"
+                style={{ width: `${Math.round(ground.progress * 100)}%` }}
+              />
+            </div>
+          )}
+        </div>
 
         {/* Boarding counters: one row per gate currently loading people */}
         {boarding.some((b) => b.active) && (
@@ -475,6 +569,12 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
           </div>
         )}
       </div>
+
+      {serviceMsg && (
+        <div className="pointer-events-none absolute bottom-24 left-1/2 z-50 -translate-x-1/2 rounded-lg border border-sky-400/40 bg-slate-950/90 px-3 py-1.5 font-mono text-[10px] text-sky-200 shadow-xl backdrop-blur-md">
+          {serviceMsg}
+        </div>
+      )}
     </div>
   );
 }

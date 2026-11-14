@@ -22,7 +22,7 @@ import {
 } from './airportTextures';
 import { buildWorld } from './worldGenerator';
 import { JetwaySystem, type JetwayStatus } from './jetwaySystem';
-import { BoardingSystem, type BoardingStatus } from './boardingSystem';
+import { BoardingSystem, type BoardingStatus, type BoardingActivityInput } from './boardingSystem';
 import { RouteTraffic } from './airRoutes';
 import { SharedAirport } from './runwayControl';
 import { RunwaySequencer } from './runwaySequencer';
@@ -47,6 +47,13 @@ export interface DemoStats {
     heldFor: number;
     queue: number;
   };
+  /** Ground services authorised for the player's aircraft at its stand. */
+  ground?: {
+    gate: number | null;
+    boarding: boolean;
+    baggage: boolean;
+    progress: number;
+  };
 }
 
 export interface QualityDemoHandle {
@@ -69,6 +76,14 @@ export interface QualityDemoHandle {
   getJetwayStatuses: () => JetwayStatus[];
   /** Passenger boarding progress per gate (empty when nobody is boarding). */
   getBoardingStatuses: () => BoardingStatus[];
+  /**
+   * Lets the player authorise boarding or baggage handling at the stand the
+   * aircraft is parked on. Returns `ok: false` when the aircraft is not at a
+   * passenger gate.
+   */
+  toggleGroundService: (
+    kind: 'boarding' | 'baggage'
+  ) => { ok: boolean; gate?: number; enabled?: boolean };
 }
 
 type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
@@ -716,6 +731,33 @@ export function createQualityDemo(
   // Passengers walking to the bridge and baggage carts shuttling around the
   // stand. Two instanced draw calls total, driven by the boarding progress.
   const boarding = new BoardingSystem(scene, AIRPORT_LAYOUT.gateZ);
+  /** Ground services the player has authorised for their own stand. */
+  const playerGround = {
+    gateId: null as number | null,
+    boarding: false,
+    baggage: false,
+    progress: 0
+  };
+  const PLAYER_PASSENGERS = 180;
+  const PLAYER_BOARDING_SECONDS = 35;
+
+  /**
+   * Nearest passenger stand to a position (within 30 m), regardless of
+   * heading. The jetway uses a stricter alignment test to dock, but ground
+   * services should be available anywhere on the stand.
+   */
+  const nearestStand = (position: THREE.Vector3): number | null => {
+    let bestGate: number | null = null;
+    let bestDistance = 30;
+    AIRPORT_LAYOUT.gateZ.forEach((z, index) => {
+      const distance = Math.hypot(position.x - 130, position.z - z);
+      if (distance <= bestDistance) {
+        bestDistance = distance;
+        bestGate = index + 1;
+      }
+    });
+    return bestGate;
+  };
 
   const gateZ = AIRPORT_LAYOUT.gateZ;
   gateZ.forEach((z) => {
@@ -1216,6 +1258,35 @@ export function createQualityDemo(
     controls.update();
   };
 
+  /**
+   * Authorise/cancel boarding or baggage handling for the player's aircraft.
+   * The services only run while the aircraft is parked at a passenger stand.
+   */
+  const toggleGroundService = (
+    kind: 'boarding' | 'baggage'
+  ): { ok: boolean; gate?: number; enabled?: boolean } => {
+    if (!aircraft) return { ok: false };
+    const gate = nearestStand(aircraft.position);
+    if (gate === null) return { ok: false };
+    if (playerGround.gateId !== gate) {
+      playerGround.gateId = gate;
+      playerGround.boarding = false;
+      playerGround.baggage = false;
+      playerGround.progress = 0;
+    }
+    if (kind === 'boarding') {
+      if (playerGround.progress >= 1) playerGround.progress = 0;
+      playerGround.boarding = !playerGround.boarding;
+    } else {
+      playerGround.baggage = !playerGround.baggage;
+    }
+    return {
+      ok: true,
+      gate,
+      enabled: kind === 'boarding' ? playerGround.boarding : playerGround.baggage
+    };
+  };
+
   // Expose the camera helpers on __sim too: useful for inspecting cities,
   // remote airports, roads and jetways without flying there manually.
   const simGlobal = (window as unknown as {
@@ -1225,6 +1296,11 @@ export function createQualityDemo(
       focusGate?: (gateId: number) => void;
       getJetwayStatuses?: () => JetwayStatus[];
       getBoardingStatuses?: () => BoardingStatus[];
+      toggleGroundService?: (kind: 'boarding' | 'baggage') => {
+        ok: boolean;
+        gate?: number;
+        enabled?: boolean;
+      };
     };
   }).__sim;
   if (simGlobal) {
@@ -1233,6 +1309,7 @@ export function createQualityDemo(
     simGlobal.focusGate = focusGate;
     simGlobal.getJetwayStatuses = () => jetways.getStatuses();
     simGlobal.getBoardingStatuses = () => boarding.getStatuses();
+    simGlobal.toggleGroundService = toggleGroundService;
   }
 
   const updateCamera = (dt: number) => {
@@ -1314,12 +1391,51 @@ export function createQualityDemo(
     runwaySequencer.update(dt);
     trafficManager.update(dt, camera.position);
     const stands = trafficManager.getStandOccupancies();
+    // Track the player's stand and advance their authorised boarding.
+    const playerGate = aircraft ? nearestStand(aircraft.position) : null;
+    if (playerGate === null && playerGround.gateId !== null) {
+      playerGround.gateId = null;
+      playerGround.boarding = false;
+      playerGround.baggage = false;
+      playerGround.progress = 0;
+    } else if (playerGate !== null && playerGate !== playerGround.gateId) {
+      playerGround.gateId = playerGate;
+      playerGround.boarding = false;
+      playerGround.baggage = false;
+      playerGround.progress = 0;
+    }
+    if (playerGround.boarding) {
+      playerGround.progress = Math.min(
+        1,
+        playerGround.progress + dt / PLAYER_BOARDING_SECONDS
+      );
+      // Doors close when the last passenger is on board.
+      if (playerGround.progress >= 1) playerGround.boarding = false;
+    }
+
+    const activities: BoardingActivityInput[] = stands.map((stand) => ({ ...stand }));
+    if (
+      playerGround.gateId !== null &&
+      !stands.some((stand) => stand.gateId === playerGround.gateId)
+    ) {
+      activities.push({
+        gateId: playerGround.gateId,
+        flightNumber: 'A320',
+        passengers: PLAYER_PASSENGERS,
+        boarded: Math.round(PLAYER_PASSENGERS * playerGround.progress),
+        boardingProgress: playerGround.progress,
+        state: playerGround.boarding ? 'boarding' : 'parked',
+        showPassengers: playerGround.boarding,
+        showBaggage: playerGround.baggage
+      });
+    }
+
     jetways.update(
       dt,
       stands,
       aircraft ? { position: aircraft.position, yaw: aircraft.rotation.y } : null
     );
-    boarding.update(dt, stands);
+    boarding.update(dt, activities);
     scheduleManager.update(dt);
     routeTraffic.update(dt);
     worldManager.update(camera.position);
@@ -1346,6 +1462,12 @@ export function createQualityDemo(
             holderUse: runwaySnapshot.holderUse,
             heldFor: runwaySnapshot.heldFor,
             queue: runwaySnapshot.queue.length
+          },
+          ground: {
+            gate: playerGround.gateId,
+            boarding: playerGround.boarding,
+            baggage: playerGround.baggage,
+            progress: playerGround.progress
           }
         });
       }
@@ -1404,6 +1526,7 @@ export function createQualityDemo(
     getTime: () => timeManager.getHour(),
     getPhase: () => timeManager.getCurrentPhase(),
     getJetwayStatuses: () => jetways.getStatuses(),
-    getBoardingStatuses: () => boarding.getStatuses()
+    getBoardingStatuses: () => boarding.getStatuses(),
+    toggleGroundService
   };
 }
