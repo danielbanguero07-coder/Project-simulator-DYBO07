@@ -51,20 +51,38 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     demoRef.current?.focusGate(radialGateRef.current);
   }, []);
 
+  const showServiceMessage = useCallback((message: string) => {
+    setServiceMsg(message);
+    if (serviceTimer.current !== null) window.clearTimeout(serviceTimer.current);
+    serviceTimer.current = window.setTimeout(() => setServiceMsg(null), 3500);
+  }, []);
+
   const toggleGround = useCallback((kind: 'boarding' | 'baggage') => {
     const result = demoRef.current?.toggleGroundService(kind);
     if (!result || !result.ok) {
-      setServiceMsg('Acércate a una puerta para dar servicio');
+      showServiceMessage('Acércate a una puerta para dar servicio');
     } else {
-      setServiceMsg(
+      showServiceMessage(
         `${kind === 'boarding' ? 'Embarque' : 'Maletas'} ${
           result.enabled ? 'permitido' : 'cancelado'
         } · Puerta ${result.gate}`
       );
     }
-    if (serviceTimer.current !== null) window.clearTimeout(serviceTimer.current);
-    serviceTimer.current = window.setTimeout(() => setServiceMsg(null), 3500);
-  }, []);
+  }, [showServiceMessage]);
+
+  const toggleRefuel = useCallback(() => {
+    const gate = demoRef.current?.getPlayerGate() ?? null;
+    if (gate === null) {
+      showServiceMessage('Aparca en una puerta para repostar');
+      return;
+    }
+    const enabled = physicsRef.current.toggleRefuel();
+    showServiceMessage(
+      enabled
+        ? `Repostaje iniciado · Puerta ${gate}`
+        : 'Repostaje detenido'
+    );
+  }, [showServiceMessage]);
 
   useEffect(() => {
     return () => {
@@ -214,6 +232,13 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
       // Link physics to 3D scene
       if (demoRef.current) {
         demoRef.current.updateAircraft(state.position, state.rotation, state.gearDown);
+        // Refuelling only makes sense while parked at a stand. If the player
+        // taxis away, stop the hose so the truck does not follow the aircraft.
+        const playerGate = demoRef.current.getPlayerGate();
+        if (state.refueling && playerGate === null) {
+          physicsRef.current.toggleRefuel();
+        }
+        demoRef.current.setPlayerFueling(state.refueling && playerGate !== null);
       }
 
       animationFrameId = requestAnimationFrame(runPhysicsLoop);
@@ -302,16 +327,31 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
           {
             icon: '🧑‍🤝‍🧑',
             label: 'Embarque',
-            hint: ground?.boarding ? 'Cancelar embarque' : 'Permitir embarque',
+            hint: ground?.boarding
+              ? `Embarcando ${ground.boarded}/${ground.passengers}`
+              : ground && ground.boarded >= ground.passengers
+                ? `Completo ${ground.boarded}/${ground.passengers}`
+                : 'Permitir embarque',
             active: ground?.boarding === true,
             run: () => toggleGround('boarding')
           },
           {
             icon: '🧳',
             label: 'Maletas',
-            hint: ground?.baggage ? 'Cancelar maletas' : 'Permitir maletas',
+            hint: ground?.baggage
+              ? `Cargando ${(ground.baggageLoadedKg / 1000).toFixed(1)}/${(ground.baggageKg / 1000).toFixed(1)} t`
+              : 'Permitir maletas',
             active: ground?.baggage === true,
             run: () => toggleGround('baggage')
+          },
+          {
+            icon: '⛽',
+            label: 'Repostar',
+            hint: flightState.refueling
+              ? `Repostando ${(flightState.fuelKg / 1000).toFixed(1)} t`
+              : `Cargar hasta ${(flightState.fuelTargetKg / 1000).toFixed(1)} t`,
+            active: flightState.refueling,
+            run: toggleRefuel
           },
           {
             icon: '🚀',
@@ -364,7 +404,13 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
               <div className="absolute inset-0 rounded-full border border-white/15 bg-slate-900/55 shadow-2xl" />
               <div className="absolute left-1/2 top-1/2 flex h-24 w-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border border-sky-400/30 bg-slate-950/80 text-center">
                 <span className="font-mono text-sm font-bold text-sky-300">A320</span>
-                <span className="mt-0.5 font-mono text-[8px] text-slate-400">V · Esc cerrar</span>
+                <span className="mt-0.5 font-mono text-[8px] text-slate-300">
+                  PAX {ground?.boarded ?? 0}/{ground?.passengers ?? 180}
+                </span>
+                <span className="font-mono text-[8px] text-amber-300">
+                  FUEL {(flightState.fuelKg / 1000).toFixed(1)} t
+                </span>
+                <span className="mt-0.5 font-mono text-[7px] text-slate-500">V · Esc cerrar</span>
               </div>
               {actions.map((action, index) => {
                 const angle = -Math.PI / 2 + (index * Math.PI * 2) / actions.length;
@@ -438,45 +484,128 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
           </div>
         )}
 
-        {/* Ground services the player can authorise from the radial menu */}
-        <div className="w-44 rounded-lg border border-white/10 bg-slate-950/60 p-2 font-mono text-[9px] text-slate-300 backdrop-blur-md">
+        {/* Aircraft loading panel: passengers, baggage and fuel, all live */}
+        <div className="pointer-events-auto w-48 rounded-lg border border-white/10 bg-slate-950/80 p-2 font-mono text-[9px] text-slate-300 backdrop-blur-md">
           <div className="flex justify-between border-b border-white/10 pb-1 mb-1">
-            <span className="font-bold text-white/70">SERVICIOS</span>
+            <span className="font-bold text-white/70">AVIÓN · CARGA</span>
             <span className={ground?.gate ? 'text-sky-400' : 'text-slate-500'}>
               {ground?.gate ? `PUERTA ${ground.gate}` : 'SIN PUERTA'}
             </span>
           </div>
-          <div className="flex gap-1">
-            <span
-              className={`flex-1 rounded px-1 py-0.5 text-center ${
+
+          {/* Passengers */}
+          <div className="flex justify-between">
+            <span>PAX</span>
+            <span className="text-sky-300">
+              {ground?.boarded ?? 0}/{ground?.passengers ?? 180}
+            </span>
+          </div>
+          <div className="mb-1 h-1 w-full overflow-hidden rounded bg-slate-700">
+            <div
+              className="h-1 rounded bg-sky-400 transition-[width] duration-300"
+              style={{ width: `${Math.round((ground?.progress ?? 0) * 100)}%` }}
+            />
+          </div>
+
+          {/* Baggage */}
+          <div className="flex justify-between">
+            <span>BODEGA</span>
+            <span className="text-emerald-300">
+              {((ground?.baggageLoadedKg ?? 0) / 1000).toFixed(1)}/
+              {((ground?.baggageKg ?? 2200) / 1000).toFixed(1)} t
+            </span>
+          </div>
+          <div className="mb-1 h-1 w-full overflow-hidden rounded bg-slate-700">
+            <div
+              className="h-1 rounded bg-emerald-400 transition-[width] duration-300"
+              style={{ width: `${Math.round((ground?.baggageProgress ?? 0) * 100)}%` }}
+            />
+          </div>
+
+          {/* Fuel */}
+          <div className="flex justify-between">
+            <span>FUEL</span>
+            <span className="text-amber-300">
+              {(flightState.fuelKg / 1000).toFixed(1)}/
+              {(flightState.fuelTargetKg / 1000).toFixed(1)} t
+            </span>
+          </div>
+          <div className="h-1 w-full overflow-hidden rounded bg-slate-700">
+            <div
+              className={`h-1 rounded transition-[width] duration-300 ${
+                flightState.refueling ? 'bg-amber-400 animate-pulse' : 'bg-amber-500'
+              }`}
+              style={{
+                width: `${Math.min(
+                  100,
+                  Math.round(
+                    (flightState.fuelKg / Math.max(1, flightState.fuelTargetKg)) * 100
+                  )
+                )}%`
+              }}
+            />
+          </div>
+          <div className="mt-1 grid grid-cols-4 gap-1 text-[8px]">
+            {[25, 50, 75, 100].map((percent) => {
+              const selected =
+                Math.round(
+                  (flightState.fuelTargetKg / flightState.fuelCapacityKg) * 100
+                ) === percent;
+              return (
+                <button
+                  key={percent}
+                  type="button"
+                  onClick={() => physicsRef.current.setFuelTargetPercent(percent)}
+                  className={`rounded border px-0.5 py-0.5 transition ${
+                    selected
+                      ? 'border-amber-400/70 bg-amber-500/20 text-amber-200'
+                      : 'border-white/10 bg-slate-800/80 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {percent}%
+                </button>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={toggleRefuel}
+            className={`mt-1 w-full rounded border px-1 py-0.5 text-[8px] transition ${
+              flightState.refueling
+                ? 'border-amber-400/70 bg-amber-500/25 text-amber-200'
+                : 'border-white/10 bg-slate-800/80 text-slate-300 hover:text-amber-200'
+            }`}
+          >
+            {flightState.refueling ? 'DETENER REPOSTAJE' : 'REPOSTAR'}
+          </button>
+
+          <div className="mt-1 flex gap-1">
+            <button
+              type="button"
+              onClick={() => toggleGround('boarding')}
+              className={`flex-1 rounded px-1 py-0.5 text-center transition ${
                 ground?.boarding
-                  ? 'bg-emerald-500/20 text-emerald-300'
-                  : 'bg-slate-800/80 text-slate-500'
+                  ? 'bg-sky-500/25 text-sky-200'
+                  : 'bg-slate-800/80 text-slate-500 hover:text-sky-200'
               }`}
             >
-              EMBARQUE
-            </span>
-            <span
-              className={`flex-1 rounded px-1 py-0.5 text-center ${
+              {ground?.boarding ? 'EMB. ON' : 'EMBARQUE'}
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleGround('baggage')}
+              className={`flex-1 rounded px-1 py-0.5 text-center transition ${
                 ground?.baggage
-                  ? 'bg-amber-500/20 text-amber-300'
-                  : 'bg-slate-800/80 text-slate-500'
+                  ? 'bg-emerald-500/25 text-emerald-200'
+                  : 'bg-slate-800/80 text-slate-500 hover:text-emerald-200'
               }`}
             >
-              MALETAS
-            </span>
+              {ground?.baggage ? 'MAL. ON' : 'MALETAS'}
+            </button>
           </div>
           {!ground?.gate && (
             <div className="mt-1 text-[8px] leading-tight text-slate-500">
-              Aparca en una puerta y pulsa V para dar servicio
-            </div>
-          )}
-          {ground?.gate !== null && ground?.gate !== undefined && ground.boarding && (
-            <div className="mt-1 h-1 w-full overflow-hidden rounded bg-slate-700">
-              <div
-                className="h-1 rounded bg-emerald-400 transition-[width] duration-700"
-                style={{ width: `${Math.round(ground.progress * 100)}%` }}
-              />
+              Aparca en una puerta para cargar
             </div>
           )}
         </div>

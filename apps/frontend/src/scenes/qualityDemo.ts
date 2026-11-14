@@ -52,7 +52,13 @@ export interface DemoStats {
     gate: number | null;
     boarding: boolean;
     baggage: boolean;
+    fueling: boolean;
     progress: number;
+    passengers: number;
+    boarded: number;
+    baggageProgress: number;
+    baggageKg: number;
+    baggageLoadedKg: number;
   };
 }
 
@@ -84,6 +90,10 @@ export interface QualityDemoHandle {
   toggleGroundService: (
     kind: 'boarding' | 'baggage'
   ) => { ok: boolean; gate?: number; enabled?: boolean };
+  /** Passenger gate (1-8) under the player's aircraft, or null. */
+  getPlayerGate: () => number | null;
+  /** Tells the apron visualisation that the wing hose is connected. */
+  setPlayerFueling: (active: boolean) => void;
 }
 
 type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
@@ -736,10 +746,14 @@ export function createQualityDemo(
     gateId: null as number | null,
     boarding: false,
     baggage: false,
-    progress: 0
+    fueling: false,
+    progress: 0,
+    baggageProgress: 0
   };
   const PLAYER_PASSENGERS = 180;
   const PLAYER_BOARDING_SECONDS = 35;
+  const PLAYER_BAGGAGE_KG = 2200;
+  const PLAYER_BAGGAGE_SECONDS = 28;
 
   /**
    * Nearest passenger stand to a position (within 30 m), regardless of
@@ -1272,12 +1286,15 @@ export function createQualityDemo(
       playerGround.gateId = gate;
       playerGround.boarding = false;
       playerGround.baggage = false;
+      playerGround.fueling = false;
       playerGround.progress = 0;
+      playerGround.baggageProgress = 0;
     }
     if (kind === 'boarding') {
       if (playerGround.progress >= 1) playerGround.progress = 0;
       playerGround.boarding = !playerGround.boarding;
     } else {
+      if (playerGround.baggageProgress >= 1) playerGround.baggageProgress = 0;
       playerGround.baggage = !playerGround.baggage;
     }
     return {
@@ -1285,6 +1302,15 @@ export function createQualityDemo(
       gate,
       enabled: kind === 'boarding' ? playerGround.boarding : playerGround.baggage
     };
+  };
+
+  /** Passenger gate the player's aircraft is parked on, if any. */
+  const getPlayerGate = (): number | null =>
+    aircraft ? nearestStand(aircraft.position) : null;
+
+  /** Drives the fuel truck / hose visual from the physics refuelling flag. */
+  const setPlayerFueling = (active: boolean) => {
+    playerGround.fueling = active;
   };
 
   // Expose the camera helpers on __sim too: useful for inspecting cities,
@@ -1301,6 +1327,8 @@ export function createQualityDemo(
         gate?: number;
         enabled?: boolean;
       };
+      getPlayerGate?: () => number | null;
+      setPlayerFueling?: (active: boolean) => void;
     };
   }).__sim;
   if (simGlobal) {
@@ -1310,6 +1338,8 @@ export function createQualityDemo(
     simGlobal.getJetwayStatuses = () => jetways.getStatuses();
     simGlobal.getBoardingStatuses = () => boarding.getStatuses();
     simGlobal.toggleGroundService = toggleGroundService;
+    simGlobal.getPlayerGate = getPlayerGate;
+    simGlobal.setPlayerFueling = setPlayerFueling;
   }
 
   const updateCamera = (dt: number) => {
@@ -1400,12 +1430,16 @@ export function createQualityDemo(
       playerGround.gateId = null;
       playerGround.boarding = false;
       playerGround.baggage = false;
+      playerGround.fueling = false;
       playerGround.progress = 0;
+      playerGround.baggageProgress = 0;
     } else if (playerGate !== null && playerGate !== playerGround.gateId) {
       playerGround.gateId = playerGate;
       playerGround.boarding = false;
       playerGround.baggage = false;
+      playerGround.fueling = false;
       playerGround.progress = 0;
+      playerGround.baggageProgress = 0;
     }
     if (playerGround.boarding) {
       playerGround.progress = Math.min(
@@ -1415,12 +1449,16 @@ export function createQualityDemo(
       // Doors close when the last passenger is on board.
       if (playerGround.progress >= 1) playerGround.boarding = false;
     }
+    if (playerGround.baggage) {
+      playerGround.baggageProgress = Math.min(
+        1,
+        playerGround.baggageProgress + dt / PLAYER_BAGGAGE_SECONDS
+      );
+      if (playerGround.baggageProgress >= 1) playerGround.baggage = false;
+    }
 
     const activities: BoardingActivityInput[] = stands.map((stand) => ({ ...stand }));
-    if (
-      playerGround.gateId !== null &&
-      !stands.some((stand) => stand.gateId === playerGround.gateId)
-    ) {
+    if (playerGround.gateId !== null) {
       activities.push({
         gateId: playerGround.gateId,
         flightNumber: 'A320',
@@ -1429,7 +1467,8 @@ export function createQualityDemo(
         boardingProgress: playerGround.progress,
         state: playerGround.boarding ? 'boarding' : 'parked',
         showPassengers: playerGround.boarding,
-        showBaggage: playerGround.baggage
+        showBaggage: playerGround.baggage,
+        showFuel: playerGround.fueling
       });
     }
 
@@ -1470,7 +1509,13 @@ export function createQualityDemo(
             gate: playerGround.gateId,
             boarding: playerGround.boarding,
             baggage: playerGround.baggage,
-            progress: playerGround.progress
+            fueling: playerGround.fueling,
+            progress: playerGround.progress,
+            passengers: PLAYER_PASSENGERS,
+            boarded: Math.round(PLAYER_PASSENGERS * playerGround.progress),
+            baggageProgress: playerGround.baggageProgress,
+            baggageKg: PLAYER_BAGGAGE_KG,
+            baggageLoadedKg: Math.round(PLAYER_BAGGAGE_KG * playerGround.baggageProgress)
           }
         });
       }
@@ -1530,6 +1575,8 @@ export function createQualityDemo(
     getPhase: () => timeManager.getCurrentPhase(),
     getJetwayStatuses: () => jetways.getStatuses(),
     getBoardingStatuses: () => boarding.getStatuses(),
-    toggleGroundService
+    toggleGroundService,
+    getPlayerGate,
+    setPlayerFueling
   };
 }

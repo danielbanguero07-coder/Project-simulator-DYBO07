@@ -45,6 +45,8 @@ export interface BoardingActivityInput {
   showPassengers?: boolean;
   /** Override for baggage carts (defaults to the passenger flag). */
   showBaggage?: boolean;
+  /** True while a fuel truck is connected to the wing. */
+  showFuel?: boolean;
 }
 
 const PASSENGERS_PER_GATE = 8;
@@ -123,11 +125,55 @@ function cartGeometry(): THREE.BufferGeometry {
   return merged;
 }
 
+/** Airport fuel truck: cab, tank and six wheels, ~7 m long. */
+function fuelTruckGeometry(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+
+  const chassis = new THREE.BoxGeometry(6.2, 0.45, 2.2);
+  chassis.translate(0, 0.62, 0);
+  parts.push(chassis);
+
+  const tank = new THREE.CylinderGeometry(1.02, 1.02, 4.1, 12);
+  tank.rotateZ(Math.PI / 2);
+  tank.translate(-0.9, 1.7, 0);
+  parts.push(tank);
+
+  const cab = new THREE.BoxGeometry(1.7, 1.6, 2.05);
+  cab.translate(2.35, 1.45, 0);
+  parts.push(cab);
+
+  const windscreen = new THREE.BoxGeometry(0.1, 0.55, 1.7);
+  windscreen.translate(3.22, 1.75, 0);
+  parts.push(windscreen);
+
+  const wheel = new THREE.CylinderGeometry(0.36, 0.36, 0.22, 10);
+  wheel.rotateX(Math.PI / 2);
+  for (const x of [-2.1, 0.2, 2.4]) {
+    for (const z of [-1.02, 1.02]) {
+      const w = wheel.clone();
+      w.translate(x, 0.36, z);
+      parts.push(w);
+    }
+  }
+  wheel.dispose();
+
+  // Hose boom that reaches the wing.
+  const boom = new THREE.BoxGeometry(0.12, 0.12, 3.4);
+  boom.translate(-2.2, 2.1, 0.4);
+  parts.push(boom);
+
+  const merged = mergeGeometries(parts, false);
+  parts.forEach((part) => part.dispose());
+  if (!merged) throw new Error('boardingSystem: could not merge fuel truck geometry');
+  return merged;
+}
+
 export class BoardingSystem {
   private readonly walkers: Walker[] = [];
   private readonly carts: Cart[] = [];
   private readonly passengerMesh: THREE.InstancedMesh;
   private readonly cartMesh: THREE.InstancedMesh;
+  private readonly fuelMesh: THREE.InstancedMesh;
   private readonly group = new THREE.Group();
   private readonly geometries: THREE.BufferGeometry[] = [];
   private readonly materials: THREE.Material[] = [];
@@ -143,7 +189,8 @@ export class BoardingSystem {
 
     const passengerGeo = passengerGeometry();
     const cartGeo = cartGeometry();
-    this.geometries.push(passengerGeo, cartGeo);
+    const fuelGeo = fuelTruckGeometry();
+    this.geometries.push(passengerGeo, cartGeo, fuelGeo);
 
     const passengerMat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
@@ -159,7 +206,12 @@ export class BoardingSystem {
       roughness: 0.6,
       metalness: 0.2
     });
-    this.materials.push(passengerMat, cartMat);
+    const fuelMat = new THREE.MeshStandardMaterial({
+      color: 0xf2b900,
+      roughness: 0.55,
+      metalness: 0.25
+    });
+    this.materials.push(passengerMat, cartMat, fuelMat);
 
     gateZ.forEach((_, index) => {
       const gateId = index + 1;
@@ -199,6 +251,13 @@ export class BoardingSystem {
     this.cartMesh.frustumCulled = false;
     this.cartMesh.name = 'boardingCarts';
     this.group.add(this.cartMesh);
+
+    this.fuelMesh = new THREE.InstancedMesh(fuelGeo, fuelMat, this.gateZ.length);
+    this.fuelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.fuelMesh.castShadow = true;
+    this.fuelMesh.frustumCulled = false;
+    this.fuelMesh.name = 'boardingFuelTrucks';
+    this.group.add(this.fuelMesh);
   }
 
   /**
@@ -230,13 +289,22 @@ export class BoardingSystem {
       const t = raw - Math.floor(raw);
       const gateIndex = walker.gateId - 1;
       const z0 = this.gateZ[gateIndex];
-      // The walkway runs along the terminal facade from a door cluster to
-      // the jetway rotunda (x ~ 177, z offset 16 m).
+      // Two legs: cross the apron to the jetway rotunda, then climb the
+      // bridge and disappear into the aircraft door. This makes the aircraft
+      // visibly fill up instead of leaving a crowd standing on the pavement.
       const start = new THREE.Vector3(179.4, 0.2, z0 + 15.5 + walker.side);
-      const end = new THREE.Vector3(177.2, 0.2, z0 + 3.6 + walker.side * 0.2);
-      this.dummy.position.lerpVectors(start, end, t);
-      this.dummy.position.y += Math.abs(Math.sin(this.elapsed * 4.2 + walker.offset * 6.28)) * 0.06;
-      this.dummy.rotation.set(0, Math.atan2(end.x - start.x, end.z - start.z), 0);
+      const rotunda = new THREE.Vector3(177.2, 0.25, z0 + 3.6 + walker.side * 0.2);
+      const door = new THREE.Vector3(143.2, 4.9, z0 + 3.6);
+      if (t < 0.45) {
+        this.dummy.position.lerpVectors(start, rotunda, t / 0.45);
+        this.dummy.position.y +=
+          Math.abs(Math.sin(this.elapsed * 4.2 + walker.offset * 6.28)) * 0.06;
+      } else {
+        const climb = (t - 0.45) / 0.55;
+        this.dummy.position.lerpVectors(rotunda, door, climb);
+        this.dummy.position.y += Math.sin(climb * Math.PI) * 0.04;
+      }
+      this.dummy.rotation.set(0, Math.atan2(door.x - start.x, door.z - start.z), 0);
       this.dummy.scale.setScalar(walker.scale);
       this.dummy.updateMatrix();
       this.passengerMesh.setMatrixAt(i, this.dummy.matrix);
@@ -274,6 +342,28 @@ export class BoardingSystem {
       this.cartMesh.setMatrixAt(i, this.dummy.matrix);
     }
     this.cartMesh.instanceMatrix.needsUpdate = true;
+
+    // --- fuel trucks -----------------------------------------------------
+    for (let i = 0; i < this.gateZ.length; i++) {
+      const occupancy = byGate.get(i + 1);
+      if (!occupancy?.showFuel) {
+        this.hide(this.fuelMesh, i);
+        continue;
+      }
+      // Parked under the wing, on the apron side away from the jetway.
+      // The aircraft is nose-east (yaw = +PI/2), so the truck lines up on X.
+      const z0 = this.gateZ[i];
+      this.dummy.position.set(126, 0.1, z0 - 11.5);
+      this.dummy.rotation.set(
+        0,
+        0,
+        Math.sin(this.elapsed * 1.6 + i) * 0.003
+      );
+      this.dummy.scale.setScalar(1);
+      this.dummy.updateMatrix();
+      this.fuelMesh.setMatrixAt(i, this.dummy.matrix);
+    }
+    this.fuelMesh.instanceMatrix.needsUpdate = true;
 
     // --- HUD snapshot ----------------------------------------------------
     for (let gate = 1; gate <= this.gateZ.length; gate++) {

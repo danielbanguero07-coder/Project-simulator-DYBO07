@@ -19,6 +19,12 @@ export interface FlightState {
   spoilers: boolean; // ground spoilers / airbrakes
   engineRunning: boolean;
 
+  // Fuel (kg). `fuelTargetKg` is the amount the player asked to load.
+  fuelKg: number;
+  fuelCapacityKg: number;
+  fuelTargetKg: number;
+  refueling: boolean;
+
   // Flight Phase
   onGround: boolean;
   stallWarning: boolean;
@@ -38,6 +44,11 @@ export class FlightPhysics {
   private readonly aircraftMass = 79000; // kg (~79 tons A320)
   /** Total take-off thrust of both engines, in newtons. */
   private readonly maxEngineThrust = 300000;
+
+  /** Usable fuel capacity of the A320, in kilograms. */
+  private readonly fuelCapacityKg = 19000;
+  /** Refuelling rate through the ground hose, kg per second. */
+  private readonly refuelRateKgPerSecond = 240;
 
   /** Returns the terrain/airport elevation in metres under the aircraft. */
   private groundSampler: (x: number, z: number) => number = () => 0;
@@ -74,6 +85,11 @@ export class FlightPhysics {
       gearDown: true,
       spoilers: false,
       engineRunning: true,
+      // Starts with a light fuel load so the player can visibly refuel it.
+      fuelKg: 4200,
+      fuelCapacityKg: this.fuelCapacityKg,
+      fuelTargetKg: this.fuelCapacityKg,
+      refueling: false,
       onGround: true,
       stallWarning: false,
       overspeedWarning: false,
@@ -108,10 +124,52 @@ export class FlightPhysics {
     }
   }
 
+  /** Selects how much fuel to load, as a percentage of full capacity. */
+  public setFuelTargetPercent(percent: number) {
+    const clamped = THREE.MathUtils.clamp(percent, 0, 100);
+    this.state.fuelTargetKg = (clamped / 100) * this.state.fuelCapacityKg;
+  }
+
+  /**
+   * Starts/stops refuelling. Only possible on the ground: the truck connects
+   * to the wing and the tanks fill progressively in `update()`.
+   */
+  public toggleRefuel(): boolean {
+    const s = this.state;
+    if (!s.onGround) {
+      s.refueling = false;
+      return false;
+    }
+    if (s.refueling) {
+      s.refueling = false;
+      return false;
+    }
+    // If the selected target is already reached, ask for a full load.
+    if (s.fuelKg >= s.fuelTargetKg) s.fuelTargetKg = s.fuelCapacityKg;
+    if (s.fuelKg >= s.fuelTargetKg) return false;
+    s.refueling = true;
+    return true;
+  }
+
   public update(dt: number) {
     const s = this.state;
     if (!s.engineRunning) {
       s.throttle = 0;
+    }
+
+    // Fuel: engines burn progressively, the ground hose fills up to the
+    // selected target. Refuelling is impossible once airborne.
+    s.fuelKg = Math.max(0, s.fuelKg - (0.08 + s.throttle * 0.85) * dt);
+    if (!s.onGround) s.refueling = false;
+    if (s.refueling) {
+      s.fuelKg = Math.min(
+        s.fuelTargetKg,
+        s.fuelKg + this.refuelRateKgPerSecond * dt
+      );
+      if (s.fuelKg >= s.fuelTargetKg) {
+        s.fuelKg = s.fuelTargetKg;
+        s.refueling = false;
+      }
     }
 
     const thrustN = s.throttle * this.maxEngineThrust;
