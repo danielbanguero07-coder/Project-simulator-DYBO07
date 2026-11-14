@@ -51,6 +51,8 @@ export interface QualityDemoHandle {
   heightAt: (x: number, z: number) => number;
   /** Fly the free camera to an airport of the world catalogue. */
   focusAirport: (x: number, z: number, elevation: number) => void;
+  /** Frame one terminal stand and its boarding bridge (1-8). */
+  focusGate: (gateId: number) => void;
   setCameraMode: (mode: 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW') => void;
   getCameraMode: () => string;
   setTime: (hour: number) => void;
@@ -1381,6 +1383,7 @@ export function createQualityDemo(
     setCameraTarget: (target) => controls.target.copy(target),
     heightAt: (x, z) => world.heightAt(x, z),
     focusAirport,
+    focusGate,
     setCameraMode: (mode) => applyCameraMode(mode),
     getCameraMode: () => cameraMode,
     setTime: (h) => timeManager.setHour(h),

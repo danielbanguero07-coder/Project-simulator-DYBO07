@@ -26,10 +26,43 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const [boarding, setBoarding] = useState<BoardingStatus[]>([]);
   const [showControlsHelp, setShowControlsHelp] = useState(false);
   const [showMap, setShowMap] = useState(true);
+  const [showRadial, setShowRadial] = useState(false);
+  const radialRef = useRef(false);
+  const radialGateRef = useRef(0);
   const timeManagerRef = useRef<TimeManager>(new TimeManager({ timeScale: 1/60, initialHour: 12 }));
+
+  useEffect(() => {
+    radialRef.current = showRadial;
+  }, [showRadial]);
+
+  const cycleCamera = useCallback(() => {
+    const modes = ['AIRCRAFT_FOLLOW', 'COCKPIT_VIEW', 'FREE_ORBIT', 'PARKING_VIEW'] as const;
+    const current = demoRef.current?.getCameraMode() ?? 'AIRCRAFT_FOLLOW';
+    const index = modes.indexOf(current as (typeof modes)[number]);
+    demoRef.current?.setCameraMode(modes[(index + 1) % modes.length]);
+  }, []);
+
+  const focusNextGate = useCallback(() => {
+    radialGateRef.current = (radialGateRef.current % 8) + 1;
+    demoRef.current?.focusGate(radialGateRef.current);
+  }, []);
 
   // Keyboard controls listener for A320 Flight (WASD / Arrows / Shift / Ctrl / G / F)
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    const key = e.key.toLowerCase();
+    if (key === 'v' && !e.repeat) {
+      e.preventDefault();
+      setShowRadial((open) => !open);
+      return;
+    }
+    if (key === 'escape' && radialRef.current) {
+      setShowRadial(false);
+      return;
+    }
+    // While the radial menu is open the aircraft ignores control keys, so a
+    // click on the menu cannot also push the throttle or the yoke.
+    if (radialRef.current) return;
+
     const physics = physicsRef.current;
     const current = physics.state;
     
@@ -40,7 +73,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     let flaps = current.flaps;
     let gearDown = current.gearDown;
 
-    switch (e.key.toLowerCase()) {
+    switch (key) {
       case 'w':
       case 'arrowup':
         pitch = -0.8; // morro abajo / empujar
@@ -221,6 +254,88 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
         />
       </div>
 
+      {/* Radial aircraft menu (V opens/closes, Esc closes) */}
+      {showRadial && (() => {
+        const actions = [
+          {
+            icon: '🚀',
+            label: 'TOGA',
+            hint: 'Empuje 100%',
+            run: () => physicsRef.current.setControls({ throttle: 1 })
+          },
+          {
+            icon: '🛬',
+            label: 'Tren',
+            hint: 'Tren arriba/abajo',
+            run: () => physicsRef.current.setControls({ gearDown: !physicsRef.current.state.gearDown })
+          },
+          {
+            icon: '🪂',
+            label: 'Flaps',
+            hint: 'Siguiente posición',
+            run: () => physicsRef.current.setControls({ flaps: (physicsRef.current.state.flaps + 1) % 4 })
+          },
+          {
+            icon: '🎥',
+            label: 'Cámara',
+            hint: 'Siguiente vista',
+            run: cycleCamera
+          },
+          {
+            icon: '🛗',
+            label: 'Puerta',
+            hint: 'Enfocar pasarela',
+            run: focusNextGate
+          },
+          {
+            icon: '🗺️',
+            label: 'Mapa',
+            hint: 'Mostrar/ocultar',
+            run: () => setShowMap((visible) => !visible)
+          }
+        ];
+        return (
+          <div
+            className="absolute inset-0 z-40 flex items-center justify-center bg-slate-950/45 backdrop-blur-[2px]"
+            onClick={() => setShowRadial(false)}
+            role="dialog"
+            aria-label="Menú radial del avión"
+          >
+            <div
+              className="relative h-[340px] w-[340px]"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="absolute inset-0 rounded-full border border-white/15 bg-slate-900/55 shadow-2xl" />
+              <div className="absolute left-1/2 top-1/2 flex h-24 w-24 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border border-sky-400/30 bg-slate-950/80 text-center">
+                <span className="font-mono text-sm font-bold text-sky-300">A320</span>
+                <span className="mt-0.5 font-mono text-[8px] text-slate-400">V · Esc cerrar</span>
+              </div>
+              {actions.map((action, index) => {
+                const angle = -Math.PI / 2 + (index * Math.PI * 2) / actions.length;
+                const x = 170 + Math.cos(angle) * 122;
+                const y = 170 + Math.sin(angle) * 122;
+                return (
+                  <button
+                    key={action.label}
+                    type="button"
+                    title={action.hint}
+                    onClick={() => {
+                      action.run();
+                      setShowRadial(false);
+                    }}
+                    className="absolute flex h-[74px] w-[74px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/15 bg-slate-900/85 text-slate-200 shadow-lg transition hover:border-sky-400/60 hover:bg-slate-800 active:scale-95"
+                    style={{ left: x, top: y }}
+                  >
+                    <span className="text-lg leading-none">{action.icon}</span>
+                    <span className="font-mono text-[9px] font-bold">{action.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 3. Top-Right: Destination & Performance (below the HUD altitude tape) */}
       <div className="absolute top-40 right-3 z-20 flex flex-col items-end gap-1.5 pointer-events-none">
         {/* Destination Badge */}
@@ -315,6 +430,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
             <div className="flex justify-between"><span>T</span><span className="text-sky-400">Empuje 100%</span></div>
             <div className="flex justify-between"><span>Shift/Ctrl</span><span className="text-sky-400">Empuje ±10%</span></div>
             <div className="flex justify-between"><span>G / F</span><span className="text-sky-400">Tren / Flaps</span></div>
+            <div className="flex justify-between"><span>V</span><span className="text-sky-400">Menú radial</span></div>
             <div className="mt-1 border-t border-white/10 pt-1 text-[8px] leading-relaxed text-amber-300">
               Despegue: T → espera 145 kt → mantén S para rotar.
             </div>
