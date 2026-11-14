@@ -70,6 +70,18 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     }
   }, [showServiceMessage]);
 
+  const togglePushback = useCallback(() => {
+    const gate = demoRef.current?.getPlayerGate() ?? null;
+    if (gate === null) {
+      showServiceMessage('Aparca en una puerta para llamar al pushback');
+      return;
+    }
+    const enabled = physicsRef.current.togglePushback();
+    showServiceMessage(
+      enabled ? `Pushback iniciado · Puerta ${gate}` : 'Pushback detenido'
+    );
+  }, [showServiceMessage]);
+
   const toggleRefuel = useCallback(() => {
     const gate = demoRef.current?.getPlayerGate() ?? null;
     if (gate === null) {
@@ -239,6 +251,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
           physicsRef.current.toggleRefuel();
         }
         demoRef.current.setPlayerFueling(state.refueling && playerGate !== null);
+        demoRef.current.setPlayerPushback(state.pushback);
       }
 
       animationFrameId = requestAnimationFrame(runPhysicsLoop);
@@ -354,6 +367,13 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
             run: toggleRefuel
           },
           {
+            icon: '🛻',
+            label: 'Pushback',
+            hint: flightState.pushback ? 'Retrocediendo…' : 'Empujar atrás',
+            active: flightState.pushback,
+            run: togglePushback
+          },
+          {
             icon: '🚀',
             label: 'TOGA',
             hint: 'Empuje 100%',
@@ -398,7 +418,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
             aria-label="Menú radial del avión"
           >
             <div
-              className="relative h-[340px] w-[340px]"
+              className="relative h-[380px] w-[380px]"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="absolute inset-0 rounded-full border border-white/15 bg-slate-900/55 shadow-2xl" />
@@ -414,8 +434,8 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
               </div>
               {actions.map((action, index) => {
                 const angle = -Math.PI / 2 + (index * Math.PI * 2) / actions.length;
-                const x = 170 + Math.cos(angle) * 122;
-                const y = 170 + Math.sin(angle) * 122;
+                const x = 190 + Math.cos(angle) * 136;
+                const y = 190 + Math.sin(angle) * 136;
                 return (
                   <button
                     key={action.label}
@@ -425,7 +445,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
                       action.run();
                       setShowRadial(false);
                     }}
-                    className="absolute flex h-[74px] w-[74px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/15 bg-slate-900/85 text-slate-200 shadow-lg transition hover:border-sky-400/60 hover:bg-slate-800 active:scale-95"
+                    className="absolute flex h-[70px] w-[70px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full border border-white/15 bg-slate-900/85 text-slate-200 shadow-lg transition hover:border-sky-400/60 hover:bg-slate-800 active:scale-95"
                     style={{
                       left: x,
                       top: y,
@@ -603,6 +623,17 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
               {ground?.baggage ? 'MAL. ON' : 'MALETAS'}
             </button>
           </div>
+          <button
+            type="button"
+            onClick={togglePushback}
+            className={`mt-1 w-full rounded border px-1 py-0.5 text-[8px] transition ${
+              flightState.pushback
+                ? 'border-sky-400/70 bg-sky-500/25 text-sky-200'
+                : 'border-white/10 bg-slate-800/80 text-slate-300 hover:text-sky-200'
+            }`}
+          >
+            {flightState.pushback ? 'EMPUJANDO ATRÁS…' : '🛻 PUSHBACK'}
+          </button>
           {!ground?.gate && (
             <div className="mt-1 text-[8px] leading-tight text-slate-500">
               Aparca en una puerta para cargar

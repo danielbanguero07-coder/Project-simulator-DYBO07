@@ -94,6 +94,8 @@ export interface QualityDemoHandle {
   getPlayerGate: () => number | null;
   /** Tells the apron visualisation that the wing hose is connected. */
   setPlayerFueling: (active: boolean) => void;
+  /** Shows/hides the pushback tug at the player's nose gear. */
+  setPlayerPushback: (active: boolean) => void;
 }
 
 type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
@@ -741,6 +743,26 @@ export function createQualityDemo(
   // Passengers walking to the bridge and baggage carts shuttling around the
   // stand. Two instanced draw calls total, driven by the boarding progress.
   const boarding = new BoardingSystem(scene, AIRPORT_LAYOUT.gateZ);
+  // Pushback tug: shown attached to the nose while the player is being
+  // pushed back. Two small meshes, no lights.
+  const pushbackTug = new THREE.Group();
+  pushbackTug.name = 'pushbackTug';
+  const tugMaterial = new THREE.MeshStandardMaterial({
+    color: 0xf2b900,
+    roughness: 0.55,
+    metalness: 0.25
+  });
+  const tugBody = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.1, 3.4), tugMaterial);
+  tugBody.position.y = 0.95;
+  tugBody.castShadow = true;
+  pushbackTug.add(tugBody);
+  const tugCab = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.3, 1.7), tugMaterial);
+  tugCab.position.set(0, 1.45, 0.7);
+  tugCab.castShadow = true;
+  pushbackTug.add(tugCab);
+  pushbackTug.visible = false;
+  scene.add(pushbackTug);
+  let playerPushback = false;
   /** Ground services the player has authorised for their own stand. */
   const playerGround = {
     gateId: null as number | null,
@@ -1267,8 +1289,8 @@ export function createQualityDemo(
   const focusGate = (gateId: number) => {
     const z = AIRPORT_LAYOUT.gateZ[gateId - 1] ?? AIRPORT_LAYOUT.gateZ[0];
     applyCameraMode('FREE_ORBIT');
-    controls.target.set(150, 7, z);
-    camera.position.set(198, 24, z + 42);
+    controls.target.set(166, 4, z + 6);
+    camera.position.set(152, 16, z + 44);
     controls.update();
   };
 
@@ -1313,6 +1335,11 @@ export function createQualityDemo(
     playerGround.fueling = active;
   };
 
+  /** Shows/hides the pushback tug attached to the player's nose gear. */
+  const setPlayerPushback = (active: boolean) => {
+    playerPushback = active;
+  };
+
   // Expose the camera helpers on __sim too: useful for inspecting cities,
   // remote airports, roads and jetways without flying there manually.
   const simGlobal = (window as unknown as {
@@ -1329,6 +1356,7 @@ export function createQualityDemo(
       };
       getPlayerGate?: () => number | null;
       setPlayerFueling?: (active: boolean) => void;
+      setPlayerPushback?: (active: boolean) => void;
     };
   }).__sim;
   if (simGlobal) {
@@ -1340,6 +1368,7 @@ export function createQualityDemo(
     simGlobal.toggleGroundService = toggleGroundService;
     simGlobal.getPlayerGate = getPlayerGate;
     simGlobal.setPlayerFueling = setPlayerFueling;
+    simGlobal.setPlayerPushback = setPlayerPushback;
   }
 
   const updateCamera = (dt: number) => {
@@ -1478,6 +1507,22 @@ export function createQualityDemo(
       aircraft ? { position: aircraft.position, yaw: aircraft.rotation.y } : null
     );
     boarding.update(dt, activities);
+
+    // Keep the pushback tug glued to the nose gear while the aircraft moves.
+    if (aircraft) {
+      pushbackTug.visible = playerPushback;
+      if (playerPushback) {
+        const yaw = aircraft.rotation.y;
+        pushbackTug.position.set(
+          aircraft.position.x + Math.sin(yaw) * 17,
+          aircraft.position.y + 0.2,
+          aircraft.position.z + Math.cos(yaw) * 17
+        );
+        pushbackTug.rotation.set(0, yaw, 0);
+      }
+    } else {
+      pushbackTug.visible = false;
+    }
     scheduleManager.update(dt);
     routeTraffic.update(dt);
     worldManager.update(camera.position);
@@ -1543,6 +1588,10 @@ export function createQualityDemo(
       disposed = true;
       resizeObserver.disconnect();
       if (aircraft) disposeObject(aircraft);
+      pushbackTug.removeFromParent();
+      tugBody.geometry.dispose();
+      tugCab.geometry.dispose();
+      tugMaterial.dispose();
       jetways.dispose();
       boarding.dispose();
       composer?.dispose();
@@ -1577,6 +1626,7 @@ export function createQualityDemo(
     getBoardingStatuses: () => boarding.getStatuses(),
     toggleGroundService,
     getPlayerGate,
-    setPlayerFueling
+    setPlayerFueling,
+    setPlayerPushback
   };
 }

@@ -65,7 +65,7 @@ interface Walker {
   scale: number;
 }
 
-const CLOTHING = [0x2b3a4d, 0x59403c, 0x3f4b3a, 0x2f2f38, 0x6b5a45, 0x414a5c];
+const CLOTHING = [0x6f86a6, 0xa26b52, 0x6d8a5e, 0x585a6e, 0xb08c62, 0x5f7796];
 
 interface Cart {
   gateId: number;
@@ -198,8 +198,8 @@ export class BoardingSystem {
       metalness: 0.05,
       // A faint self-lit component keeps the silhouettes readable at night
       // without adding a single light to the scene.
-      emissive: 0x18212b,
-      emissiveIntensity: 0.55
+      emissive: 0x2a3644,
+      emissiveIntensity: 0.8
     });
     const cartMat = new THREE.MeshStandardMaterial({
       color: 0xe4ebf1,
@@ -219,8 +219,8 @@ export class BoardingSystem {
         this.walkers.push({
           gateId,
           offset: i / PASSENGERS_PER_GATE,
-          side: ((i % 3) - 1) * 0.7,
-          scale: 0.9 + ((i * 7 + index * 3) % 5) * 0.05
+          side: ((i % 3) - 1) * 0.8,
+          scale: 1.05 + ((i * 7 + index * 3) % 5) * 0.05
         });
       }
       this.carts.push({ gateId });
@@ -289,22 +289,16 @@ export class BoardingSystem {
       const t = raw - Math.floor(raw);
       const gateIndex = walker.gateId - 1;
       const z0 = this.gateZ[gateIndex];
-      // Two legs: cross the apron to the jetway rotunda, then climb the
-      // bridge and disappear into the aircraft door. This makes the aircraft
-      // visibly fill up instead of leaving a crowd standing on the pavement.
+      // Walk in a visible stream along the apron, from the terminal facade to
+      // the south side of the aircraft. Keeping the queue outside the bridge
+      // tunnel means the player can actually see the passengers boarding
+      // instead of a few silhouettes hidden inside the structure.
       const start = new THREE.Vector3(179.4, 0.2, z0 + 15.5 + walker.side);
-      const rotunda = new THREE.Vector3(177.2, 0.25, z0 + 3.6 + walker.side * 0.2);
-      const door = new THREE.Vector3(143.2, 4.9, z0 + 3.6);
-      if (t < 0.45) {
-        this.dummy.position.lerpVectors(start, rotunda, t / 0.45);
-        this.dummy.position.y +=
-          Math.abs(Math.sin(this.elapsed * 4.2 + walker.offset * 6.28)) * 0.06;
-      } else {
-        const climb = (t - 0.45) / 0.55;
-        this.dummy.position.lerpVectors(rotunda, door, climb);
-        this.dummy.position.y += Math.sin(climb * Math.PI) * 0.04;
-      }
-      this.dummy.rotation.set(0, Math.atan2(door.x - start.x, door.z - start.z), 0);
+      const end = new THREE.Vector3(146, 0.2, z0 + 8.4 + walker.side * 0.35);
+      this.dummy.position.lerpVectors(start, end, t);
+      this.dummy.position.y +=
+        Math.abs(Math.sin(this.elapsed * 4.2 + walker.offset * 6.28)) * 0.07;
+      this.dummy.rotation.set(0, Math.atan2(end.x - start.x, end.z - start.z), 0);
       this.dummy.scale.setScalar(walker.scale);
       this.dummy.updateMatrix();
       this.passengerMesh.setMatrixAt(i, this.dummy.matrix);

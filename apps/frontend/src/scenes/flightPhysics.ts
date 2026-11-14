@@ -25,6 +25,10 @@ export interface FlightState {
   fuelTargetKg: number;
   refueling: boolean;
 
+  // Pushback: the tug moves the aircraft backwards off the stand.
+  pushback: boolean;
+  pushbackRemaining: number;
+
   // Flight Phase
   onGround: boolean;
   stallWarning: boolean;
@@ -90,6 +94,8 @@ export class FlightPhysics {
       fuelCapacityKg: this.fuelCapacityKg,
       fuelTargetKg: this.fuelCapacityKg,
       refueling: false,
+      pushback: false,
+      pushbackRemaining: 0,
       onGround: true,
       stallWarning: false,
       overspeedWarning: false,
@@ -151,6 +157,27 @@ export class FlightPhysics {
     return true;
   }
 
+  /**
+   * Starts/stops pushback. A tug can only move an aircraft that is stopped on
+   * the ground; it pushes it 22 m straight back along its current heading.
+   */
+  public togglePushback(): boolean {
+    const s = this.state;
+    if (!s.onGround || s.speedKts > 3) {
+      s.pushback = false;
+      return false;
+    }
+    if (s.pushback) {
+      s.pushback = false;
+      return false;
+    }
+    s.speedKts = 0;
+    s.throttle = 0;
+    s.pushbackRemaining = 22;
+    s.pushback = true;
+    return true;
+  }
+
   public update(dt: number) {
     const s = this.state;
     if (!s.engineRunning) {
@@ -169,6 +196,24 @@ export class FlightPhysics {
       if (s.fuelKg >= s.fuelTargetKg) {
         s.fuelKg = s.fuelTargetKg;
         s.refueling = false;
+      }
+    }
+
+    // Pushback: 2.5 m/s straight back along the current heading. The normal
+    // ground physics below still runs, but throttle, speed and steering are
+    // forced to zero so only the tug moves the aircraft.
+    if (s.pushback) {
+      if (!s.onGround || s.speedKts > 2) {
+        s.pushback = false;
+      } else {
+        const step = Math.min(s.pushbackRemaining, 2.5 * dt);
+        s.position.x -= Math.sin(s.rotation.y) * step;
+        s.position.z -= Math.cos(s.rotation.y) * step;
+        s.pushbackRemaining -= step;
+        if (s.pushbackRemaining <= 0.01) s.pushback = false;
+        s.throttle = 0;
+        s.speedKts = 0;
+        s.yawInput = 0;
       }
     }
 
