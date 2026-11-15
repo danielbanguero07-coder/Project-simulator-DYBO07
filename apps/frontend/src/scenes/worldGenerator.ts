@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { registerEditableLight } from './lightController';
 import type { TextureStreamer } from './textureStreaming';
 import {
@@ -1202,20 +1203,45 @@ export function buildWorld(
     [0.25, 0.25]
   ];
 
-  for (const city of CITIES) {
-    const reach = city.radius * 0.95;
+  // A large metropolitan belt wrapped around the airport plateau. The runway,
+  // taxiways, apron and terminal stay clear; the approach corridors only get
+  // low-rise industrial buildings, like the warehouse belts around real
+  // airports. `builtCells` lets the tree pass plant greenery in the leftover
+  // plazas and parks instead of inside buildings.
+  const METRO_RADIUS = 2400;
+  const builtCells = new Set<string>();
+  const parkCells: Array<{ x: number; z: number; y: number }> = [];
+  const cellKey = (x: number, z: number) =>
+    `${Math.round(x / STREET_STEP)}:${Math.round(z / STREET_STEP)}`;
+  const inAirportCore = (x: number, z: number) =>
+    Math.abs(x) < 350 && Math.abs(z) < 1490;
+  const inApproachCorridor = (x: number, z: number) =>
+    Math.abs(x) < 620 && Math.abs(z) < 4400;
+
+  const addCityGrid = (
+    centerX: number,
+    centerZ: number,
+    radius: number,
+    elevation: number,
+    options: {
+      skip?: (x: number, z: number) => boolean;
+      heightLimit?: (x: number, z: number, height: number) => number;
+    } = {}
+  ) => {
+    const reach = radius * 0.95;
     const steps = Math.ceil(reach / STREET_STEP);
 
     for (let gx = -steps; gx <= steps; gx++) {
       for (let gz = -steps; gz <= steps; gz++) {
-        const cellX = city.x + gx * STREET_STEP;
-        const cellZ = city.z + gz * STREET_STEP;
-        const distance = Math.hypot(cellX - city.x, cellZ - city.z);
+        const cellX = centerX + gx * STREET_STEP;
+        const cellZ = centerZ + gz * STREET_STEP;
+        const distance = Math.hypot(cellX - centerX, cellZ - centerZ);
         if (distance > reach) continue;
+        if (options.skip?.(cellX, cellZ)) continue;
 
         const ground = terrainHeight(cellX, cellZ);
         // Rivers cut through some city pads: skip streets and blocks in water.
-        if (ground < city.elevation - 1.5) continue;
+        if (ground < elevation - 1.5) continue;
 
         // Street base covers the full cell; the block sits on top, leaving
         // STREET_WIDTH of asphalt exposed between blocks.
@@ -1231,9 +1257,11 @@ export function buildWorld(
         dummy.updateMatrix();
         if (isPark) {
           parkMatrices.push(dummy.matrix.clone());
+          parkCells.push({ x: cellX, z: cellZ, y: ground });
           continue;
         }
         blockMatrices.push(dummy.matrix.clone());
+        builtCells.add(cellKey(cellX, cellZ));
 
         const distanceFactor = 1 - distance / reach;
         for (const [lotX, lotZ] of lotOffsets) {
@@ -1242,8 +1270,9 @@ export function buildWorld(
           const lotSize = BLOCK_SIZE * 0.5;
           const width = lotSize * (0.56 + cityRng() * 0.32);
           const depth = lotSize * (0.56 + cityRng() * 0.32);
-          const height =
+          let height =
             9 + cityRng() * 22 + Math.pow(distanceFactor, 2.2) * (42 + cityRng() * 135);
+          if (options.heightLimit) height = options.heightLimit(cellX, cellZ, height);
 
           dummy.position.set(
             cellX + lotX * BLOCK_SIZE,
@@ -1259,7 +1288,23 @@ export function buildWorld(
         }
       }
     }
+  };
+
+  for (const city of CITIES) {
+    addCityGrid(city.x, city.z, city.radius, city.elevation);
   }
+  addCityGrid(0, 0, METRO_RADIUS, HOME_AIRPORT.elevation, {
+    skip: inAirportCore,
+    heightLimit: (x, z, height) => {
+      if (!inApproachCorridor(x, z)) return height;
+      // Keep the straight-in approach path low, but let the skyline rise as
+      // soon as you move laterally away from the extended centreline.
+      const lateral = Math.abs(x);
+      if (lateral < 420) return Math.min(height, 18);
+      const rise = Math.min(1, (lateral - 420) / 200);
+      return Math.min(height, 18 + rise * 62);
+    }
+  });
 
   const buildings = new THREE.InstancedMesh(
     buildingGeometry,
@@ -1293,7 +1338,7 @@ export function buildWorld(
 
   /* ------------------------------- trees ------------------------------- */
   const treeRng = mulberry32(0x7ee5);
-  const treeCount = premium ? 2600 : 1200;
+  const treeCount = premium ? 4600 : 2000;
   const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.8, 3.2, 5);
   const canopyGeometry = new THREE.ConeGeometry(3.4, 10, 6);
   const broadleafGeometry = new THREE.IcosahedronGeometry(3.5, 1);
@@ -1317,32 +1362,8 @@ export function buildWorld(
   const treeShades = [0x2e4a28, 0x395c2f, 0x466b37, 0x27401f];
   const broadleafShades = [0x3f6f34, 0x4d7d3a, 0x355e2c, 0x5a8a45];
 
-  for (let i = 0; i < treeCount * 2 && trunkMatrices.length < treeCount; i++) {
-    const x = (treeRng() - 0.5) * WORLD_SIZE * 0.78;
-    const z = (treeRng() - 0.5) * WORLD_SIZE * 0.78;
-    const distanceFromAirport = Math.hypot(x, z);
-    if (distanceFromAirport < 2900) continue;
-
-    let insidePad = false;
-    for (const city of CITIES) {
-      if (Math.hypot(x - city.x, z - city.z) < city.radius * 0.92) {
-        insidePad = true;
-        break;
-      }
-    }
-    if (insidePad) continue;
-
-    const height = terrainHeight(x, z);
-    if (height < 3 || height > 520) continue;
-    const slope =
-      Math.hypot(
-        terrainHeight(x + 10, z) - height,
-        terrainHeight(x, z + 10) - height
-      ) / 10;
-    if (slope > 0.85) continue;
-
-    const scale = 0.7 + treeRng() * 0.9;
-    dummy.position.set(x, height + 1.6 * scale, z);
+  const plantTree = (x: number, z: number, baseY: number, scale: number) => {
+    dummy.position.set(x, baseY + 1.6 * scale, z);
     dummy.rotation.set(0, treeRng() * Math.PI * 2, 0);
     dummy.scale.setScalar(scale);
     dummy.updateMatrix();
@@ -1350,22 +1371,106 @@ export function buildWorld(
 
     if (treeRng() < 0.42) {
       // Broadleaf: a squashed icosahedron reads as a rounded canopy.
-      dummy.position.set(x, height + 5.2 * scale, z);
+      dummy.position.set(x, baseY + 5.2 * scale, z);
       dummy.rotation.set(0, treeRng() * Math.PI * 2, 0);
       dummy.scale.set(scale * 1.3, scale * 0.95, scale * 1.3);
       dummy.updateMatrix();
       broadleafMatrices.push(dummy.matrix.clone());
       const shade = broadleafShades[Math.floor(treeRng() * broadleafShades.length)];
       broadleafColors.push(new THREE.Color(shade));
-      continue;
+      return;
     }
 
-    dummy.position.set(x, height + 7.6 * scale, z);
+    dummy.position.set(x, baseY + 7.6 * scale, z);
     dummy.rotation.set(0, 0, 0);
     dummy.scale.setScalar(scale);
     dummy.updateMatrix();
     canopyMatrices.push(dummy.matrix.clone());
     canopyColors.push(new THREE.Color(treeShades[Math.floor(treeRng() * treeShades.length)]));
+  };
+
+  // Every park gets a grove so the green cells read as real lungs of the city
+  // instead of flat green squares, both around the airport and in the cities.
+  const parkTreeBudget = Math.min(parkCells.length * 16, Math.floor(treeCount * 0.42));
+  for (let i = 0; i < parkTreeBudget; i++) {
+    const cell = parkCells[Math.floor(treeRng() * parkCells.length)];
+    if (!cell) break;
+    const x = cell.x + (treeRng() - 0.5) * BLOCK_SIZE * 0.84;
+    const z = cell.z + (treeRng() - 0.5) * BLOCK_SIZE * 0.84;
+    plantTree(x, z, cell.y, 0.7 + treeRng() * 0.9);
+  }
+
+  // Tree-lined boulevards on the main avenues around the airport. They give
+  // the grid a green structure instead of an endless sea of asphalt.
+  const plantAvenue = (line: number, min: number, max: number) => {
+    const step = 38;
+    for (let t = min; t <= max; t += step) {
+      for (const side of [-11.6, 11.6]) {
+        if (treeRng() < 0.35) continue;
+        const x = line + side;
+        const z = t + (treeRng() - 0.5) * 9;
+        const baseY = terrainHeight(x, z);
+        if (baseY < WATER_LEVEL + 0.5) continue;
+        plantTree(x, z, baseY, 0.55 + treeRng() * 0.35);
+      }
+    }
+  };
+  for (let n = -14; n <= 14; n++) {
+    const line = (n + 0.5) * STREET_STEP;
+    const lateral = Math.abs(line);
+    if (lateral >= 350 && lateral <= 1250) {
+      plantAvenue(line, -1500, 1500);
+    }
+  }
+
+  for (let i = 0; i < treeCount * 3 && trunkMatrices.length < treeCount; i++) {
+    let x: number;
+    let z: number;
+
+    if (treeRng() < 0.52) {
+      // Vegetation inside the metropolitan belt. Trees only grow on the free
+      // cells: parks, plazas and leftover lots between the generated blocks,
+      // never inside a building footprint or on the airport movement area.
+      const angle = treeRng() * Math.PI * 2;
+      const radius = 340 + Math.pow(treeRng(), 0.7) * (METRO_RADIUS - 340);
+      x = Math.cos(angle) * radius;
+      z = Math.sin(angle) * radius;
+      if (inAirportCore(x, z)) continue;
+      if (builtCells.has(cellKey(x, z))) continue;
+      // Keep the runway strip itself clear even where the metro belt starts.
+      if (Math.abs(x) < 120 && Math.abs(z) < 1600) continue;
+      // Stay inside the park block, not on the asphalt ring around it.
+      const offsetX = x - Math.round(x / STREET_STEP) * STREET_STEP;
+      const offsetZ = z - Math.round(z / STREET_STEP) * STREET_STEP;
+      if (Math.abs(offsetX) > BLOCK_SIZE * 0.44 || Math.abs(offsetZ) > BLOCK_SIZE * 0.44) {
+        continue;
+      }
+    } else {
+      x = (treeRng() - 0.5) * WORLD_SIZE * 0.78;
+      z = (treeRng() - 0.5) * WORLD_SIZE * 0.78;
+      const distanceFromAirport = Math.hypot(x, z);
+      if (distanceFromAirport < 2900) continue;
+
+      let insidePad = false;
+      for (const city of CITIES) {
+        if (Math.hypot(x - city.x, z - city.z) < city.radius * 0.92) {
+          insidePad = true;
+          break;
+        }
+      }
+      if (insidePad) continue;
+    }
+
+    const height = terrainHeight(x, z);
+    if (height < WATER_LEVEL + 0.5 || height > 520) continue;
+    const slope =
+      Math.hypot(
+        terrainHeight(x + 10, z) - height,
+        terrainHeight(x, z + 10) - height
+      ) / 10;
+    if (slope > 0.85) continue;
+
+    plantTree(x, z, height, 0.7 + treeRng() * 0.9);
   }
 
   const trunks = new THREE.InstancedMesh(trunkGeometry, trunkMaterial, trunkMatrices.length);
@@ -1398,6 +1503,242 @@ export function buildWorld(
   broadleaves.instanceMatrix.needsUpdate = true;
   if (broadleaves.instanceColor) broadleaves.instanceColor.needsUpdate = true;
   group.add(broadleaves);
+
+  /* ----------------------------- city life ----------------------------- */
+  // Cars and pedestrians travel along the street grid that addCityGrid() laid
+  // around the airport. Both are single InstancedMeshes whose matrices are
+  // refreshed every frame, so the whole metropolis costs two draw calls.
+  const lifeRng = mulberry32(0x51ee7);
+  const METRO_LIMIT = METRO_RADIUS * 0.92;
+  const LANE = 3.1;
+  const SIDEWALK = 10.6;
+
+  // Straight road segments. Roads that would cut across the movement area are
+  // split into two halves, one on each side of the airport; cars bounce at the
+  // segment ends instead of crossing the runway.
+  const roadSegments: Array<{ axis: 'x' | 'z'; line: number; min: number; max: number }> = [];
+  for (let n = -14; n <= 14; n++) {
+    const line = (n + 0.5) * STREET_STEP;
+    if (Math.abs(line) > METRO_LIMIT) continue;
+    // Horizontal roads (axis x) run along constant z.
+    if (Math.abs(line) >= 1490) {
+      roadSegments.push({ axis: 'x', line, min: -METRO_LIMIT, max: METRO_LIMIT });
+    } else {
+      if (METRO_LIMIT > 350) {
+        roadSegments.push({ axis: 'x', line, min: -METRO_LIMIT, max: -350 });
+        roadSegments.push({ axis: 'x', line, min: 350, max: METRO_LIMIT });
+      }
+    }
+    // Vertical roads (axis z) run along constant x.
+    if (Math.abs(line) >= 350) {
+      roadSegments.push({ axis: 'z', line, min: -METRO_LIMIT, max: METRO_LIMIT });
+    } else {
+      roadSegments.push({ axis: 'z', line, min: -METRO_LIMIT, max: -1490 });
+      roadSegments.push({ axis: 'z', line, min: 1490, max: METRO_LIMIT });
+    }
+  }
+
+  interface RoadAgent {
+    axis: 'x' | 'z';
+    line: number;
+    along: number;
+    min: number;
+    max: number;
+    dir: number;
+    speed: number;
+    lane: number;
+    groundY: number;
+    sampleAt: number;
+    phase: number;
+  }
+
+  const spawnAgents = (count: number, speedMin: number, speedMax: number, laneOffset: number) => {
+    const list: RoadAgent[] = [];
+    for (let i = 0; i < count; i++) {
+      const road = roadSegments[Math.floor(lifeRng() * roadSegments.length)];
+      const dir = lifeRng() < 0.5 ? 1 : -1;
+      const along = road.min + lifeRng() * (road.max - road.min);
+      const axis = road.axis;
+      const lane = dir * laneOffset;
+      const x = axis === 'x' ? along : road.line + lane;
+      const z = axis === 'x' ? road.line + lane : along;
+      list.push({
+        axis,
+        line: road.line,
+        along,
+        min: road.min,
+        max: road.max,
+        dir,
+        speed: speedMin + lifeRng() * (speedMax - speedMin),
+        lane,
+        groundY: terrainHeight(x, z),
+        sampleAt: along,
+        phase: lifeRng() * Math.PI * 2
+      });
+    }
+    return list;
+  };
+
+  // Vehicles: two boxes merged into one low-poly car, tinted per instance.
+  const carBody = new THREE.BoxGeometry(1.8, 0.6, 4.2);
+  carBody.translate(0, 0.7, 0);
+  const carCabin = new THREE.BoxGeometry(1.6, 0.58, 2);
+  carCabin.translate(0, 1.24, -0.1);
+  const carGeometry =
+    mergeGeometries([carBody.toNonIndexed(), carCabin.toNonIndexed()], false) ??
+    new THREE.BoxGeometry(1.8, 1.4, 4.2);
+  carBody.dispose();
+  carCabin.dispose();
+  const carMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.42,
+    metalness: 0.3,
+    emissive: 0xffd9a0,
+    emissiveIntensity: 0
+  });
+  registerEditableLight(carMaterial, { color: 0xffd9a0, nightIntensity: 0.4 });
+
+  // People: body + head merged, gently bobbing while they walk.
+  const personBody = new THREE.BoxGeometry(0.42, 1.02, 0.3);
+  personBody.translate(0, 0.63, 0);
+  const personHead = new THREE.IcosahedronGeometry(0.21, 1);
+  personHead.translate(0, 1.38, 0);
+  const personGeometry =
+    mergeGeometries([personBody.toNonIndexed(), personHead.toNonIndexed()], false) ??
+    new THREE.BoxGeometry(0.42, 1.6, 0.3);
+  personBody.dispose();
+  personHead.dispose();
+  const personMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.85,
+    metalness: 0.02,
+    emissive: 0xffd9a0,
+    emissiveIntensity: 0.04
+  });
+  registerEditableLight(personMaterial, {
+    color: 0xffd9a0,
+    nightIntensity: 0.26,
+    dayIntensity: 0.04
+  });
+
+  disposables.push(carGeometry, carMaterial, personGeometry, personMaterial);
+
+  const carPalette = [
+    0xd9dde3, 0x2e3742, 0x8c2f2f, 0x2f5c8c, 0xc7b299, 0x3a6b4f, 0xeeeeee, 0x1c1f24,
+    0xd8a921
+  ];
+  const clothingPalette = [
+    0x6f86a6, 0xa26b52, 0x6d8a5e, 0x585a6e, 0xb08c62, 0x5f7796, 0x8f4f4f, 0x3f5f7a
+  ];
+
+  const cars = spawnAgents(premium ? 260 : 130, 7, 15, LANE);
+  const carMesh = new THREE.InstancedMesh(carGeometry, carMaterial, cars.length);
+  carMesh.name = 'cityCars';
+  carMesh.frustumCulled = false;
+  cars.forEach((_, index) =>
+    carMesh.setColorAt(index, new THREE.Color(carPalette[index % carPalette.length]))
+  );
+  if (carMesh.instanceColor) carMesh.instanceColor.needsUpdate = true;
+  group.add(carMesh);
+
+  const people = spawnAgents(premium ? 380 : 190, 0.9, 1.7, SIDEWALK);
+  // Walk along the sidewalk edge nearest the block on both sides.
+  people.forEach((person, index) => {
+    person.lane = (index % 2 === 0 ? 1 : -1) * SIDEWALK;
+  });
+
+  // A small crowd on the landside pavement of the terminal, next to the
+  // drop-off lane, so the airport itself also feels busy on foot.
+  const plazaPeople: RoadAgent[] = [];
+  const plazaCount = premium ? 46 : 22;
+  for (let i = 0; i < plazaCount; i++) {
+    const along = 94 + lifeRng() * 336;
+    plazaPeople.push({
+      axis: 'z',
+      line: 285 + (lifeRng() - 0.5) * 9,
+      along,
+      min: 94,
+      max: 430,
+      dir: lifeRng() < 0.5 ? 1 : -1,
+      speed: 0.8 + lifeRng() * 0.9,
+      lane: 0,
+      groundY: HOME_AIRPORT.elevation,
+      sampleAt: along,
+      phase: lifeRng() * Math.PI * 2
+    });
+  }
+
+  const personTotal = people.length + plazaPeople.length;
+  const personMesh = new THREE.InstancedMesh(personGeometry, personMaterial, personTotal);
+  personMesh.name = 'cityPedestrians';
+  personMesh.frustumCulled = false;
+  for (let index = 0; index < personTotal; index++) {
+    personMesh.setColorAt(
+      index,
+      new THREE.Color(clothingPalette[index % clothingPalette.length])
+    );
+  }
+  if (personMesh.instanceColor) personMesh.instanceColor.needsUpdate = true;
+  group.add(personMesh);
+
+  const lifeDummy = new THREE.Object3D();
+
+  const stepAgents = (
+    list: RoadAgent[],
+    mesh: THREE.InstancedMesh,
+    dt: number,
+    bob: number,
+    indexOffset = 0
+  ) => {
+    for (let i = 0; i < list.length; i++) {
+      const agent = list[i];
+      agent.along += agent.dir * agent.speed * dt;
+      if (agent.along > agent.max) {
+        agent.along = agent.max;
+        agent.dir = -1;
+      } else if (agent.along < agent.min) {
+        agent.along = agent.min;
+        agent.dir = 1;
+      }
+      const x = agent.axis === 'x' ? agent.along : agent.line + agent.lane;
+      const z = agent.axis === 'x' ? agent.line + agent.lane : agent.along;
+      if (Math.abs(agent.along - agent.sampleAt) > 9) {
+        agent.sampleAt = agent.along;
+        agent.groundY = terrainHeight(x, z);
+      }
+      const yaw =
+        agent.axis === 'x'
+          ? agent.dir > 0
+            ? Math.PI / 2
+            : -Math.PI / 2
+          : agent.dir > 0
+            ? 0
+            : Math.PI;
+      lifeDummy.position.set(
+        x,
+        agent.groundY + 0.03 + (bob > 0 ? Math.abs(Math.sin(agent.phase)) * bob : 0),
+        z
+      );
+      lifeDummy.rotation.set(0, yaw, 0);
+      lifeDummy.updateMatrix();
+      mesh.setMatrixAt(indexOffset + i, lifeDummy.matrix);
+    }
+  };
+
+  const updateCityLife = (dt: number) => {
+    for (let i = 0; i < people.length; i++) {
+      people[i].phase += dt * (4.5 + people[i].speed * 1.6);
+    }
+    for (let i = 0; i < plazaPeople.length; i++) {
+      plazaPeople[i].phase += dt * (4.5 + plazaPeople[i].speed * 1.6);
+    }
+    stepAgents(cars, carMesh, dt, 0);
+    stepAgents(people, personMesh, dt, 0.06);
+    stepAgents(plazaPeople, personMesh, dt, 0.05, people.length);
+    carMesh.instanceMatrix.needsUpdate = true;
+    personMesh.instanceMatrix.needsUpdate = true;
+  };
+  updateCityLife(0);
 
   /* -------------------------- remote airports -------------------------- */
   // Reuse the streamed 4K asphalt/concrete maps when available so every
@@ -1448,6 +1789,8 @@ export function buildWorld(
   const nightCloud = new THREE.Color(0x1a2433);
 
   const update = (dt: number, daylight: number) => {
+    updateCityLife(dt);
+
     if (waterNormalTexture) {
       waterOffset.x = (waterOffset.x + dt * 0.013) % 1;
       waterOffset.y = (waterOffset.y + dt * 0.008) % 1;
