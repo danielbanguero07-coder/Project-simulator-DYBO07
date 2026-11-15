@@ -1655,7 +1655,7 @@ export function buildWorld(
     const along = 94 + lifeRng() * 336;
     plazaPeople.push({
       axis: 'z',
-      line: 285 + (lifeRng() - 0.5) * 9,
+      line: 292 + (lifeRng() - 0.5) * 9,
       along,
       min: 94,
       max: 430,
@@ -1680,6 +1680,273 @@ export function buildWorld(
   }
   if (personMesh.instanceColor) personMesh.instanceColor.needsUpdate = true;
   group.add(personMesh);
+
+  /* --------------------------- street lights --------------------------- */
+  // Luminaires along every avenue near the airport. Each one is three
+  // instances (post, emissive head, ground light pool), so the whole lighting
+  // grid is three draw calls and no real lights are added. The pools are
+  // additive discs whose opacity follows the night factor, which fakes the
+  // warm illumination on the asphalt without a single PointLight.
+  const lampDummy = new THREE.Object3D();
+  interface LampSpot {
+    x: number;
+    z: number;
+    y: number;
+    poolX: number;
+    poolZ: number;
+  }
+  const lampSpots: LampSpot[] = [];
+  const addLamp = (x: number, z: number, poolX: number, poolZ: number) => {
+    const y = terrainHeight(x, z);
+    if (y < WATER_LEVEL + 0.5) return;
+    lampSpots.push({ x, z, y, poolX, poolZ });
+  };
+
+  for (const road of roadSegments) {
+    if (Math.abs(road.line) > 1900) continue;
+    const min = Math.max(road.min, -1900);
+    const max = Math.min(road.max, 1900);
+    const side = road.line >= 0 ? 1 : -1;
+    for (let t = min + 18; t <= max - 8; t += 58) {
+      if (road.axis === 'z') {
+        addLamp(
+          road.line + side * 12.6,
+          t,
+          road.line + side * 12.6 - side * 5.4,
+          t
+        );
+      } else {
+        addLamp(
+          t,
+          road.line + side * 12.6,
+          t,
+          road.line + side * 12.6 - side * 5.4
+        );
+      }
+    }
+  }
+  // Terminal drop-off lane, so the landside is lit as well.
+  for (let z = 100; z <= 424; z += 46) {
+    addLamp(283, z, 277, z);
+  }
+
+  const lampPostGeometry =
+    mergeGeometries(
+      [
+        new THREE.CylinderGeometry(0.11, 0.18, 7.4, 6).translate(0, 3.7, 0).toNonIndexed(),
+        new THREE.BoxGeometry(0.5, 0.16, 0.3).translate(0, 7.32, 0).toNonIndexed()
+      ],
+      false
+    ) ?? new THREE.CylinderGeometry(0.14, 0.2, 7.4, 6);
+  const lampPostMaterial = new THREE.MeshStandardMaterial({
+    color: 0x39434d,
+    roughness: 0.55,
+    metalness: 0.6
+  });
+  const lampHeadGeometry = new THREE.BoxGeometry(0.82, 0.14, 0.36);
+  lampHeadGeometry.translate(0, 7.55, 0);
+  const lampHeadMaterial = new THREE.MeshStandardMaterial({
+    color: 0xe8e6da,
+    roughness: 0.3,
+    metalness: 0.1,
+    emissive: 0xffd9a0,
+    emissiveIntensity: 0
+  });
+  registerEditableLight(lampHeadMaterial, { color: 0xffd9a0, nightIntensity: 2.2 });
+  const poolGeometry = new THREE.CircleGeometry(7, 12);
+  poolGeometry.rotateX(-Math.PI / 2);
+  const poolCanvas = document.createElement('canvas');
+  poolCanvas.width = 64;
+  poolCanvas.height = 64;
+  const poolContext = poolCanvas.getContext('2d');
+  if (poolContext) {
+    const gradient = poolContext.createRadialGradient(32, 32, 2, 32, 32, 31);
+    gradient.addColorStop(0, 'rgba(255,255,255,1)');
+    gradient.addColorStop(0.4, 'rgba(255,244,214,0.55)');
+    gradient.addColorStop(1, 'rgba(255,244,214,0)');
+    poolContext.fillStyle = gradient;
+    poolContext.fillRect(0, 0, 64, 64);
+  }
+  const poolTexture = new THREE.CanvasTexture(poolCanvas);
+  poolTexture.colorSpace = THREE.SRGBColorSpace;
+  const poolMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffc46e,
+    map: poolTexture,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending
+  });
+  disposables.push(
+    lampPostGeometry,
+    lampPostMaterial,
+    lampHeadGeometry,
+    lampHeadMaterial,
+    poolGeometry,
+    poolTexture,
+    poolMaterial
+  );
+
+  const lampPosts = new THREE.InstancedMesh(
+    lampPostGeometry,
+    lampPostMaterial,
+    lampSpots.length
+  );
+  lampPosts.name = 'streetLampPosts';
+  lampPosts.frustumCulled = false;
+  const lampHeads = new THREE.InstancedMesh(
+    lampHeadGeometry,
+    lampHeadMaterial,
+    lampSpots.length
+  );
+  lampHeads.name = 'streetLampHeads';
+  lampHeads.frustumCulled = false;
+  const lampPools = new THREE.InstancedMesh(
+    poolGeometry,
+    poolMaterial,
+    lampSpots.length
+  );
+  lampPools.name = 'streetLightPools';
+  lampPools.frustumCulled = false;
+  lampPools.visible = false;
+  lampSpots.forEach((lamp, index) => {
+    lampDummy.position.set(lamp.x, lamp.y + 0.05, lamp.z);
+    lampDummy.rotation.set(0, 0, 0);
+    lampDummy.updateMatrix();
+    lampPosts.setMatrixAt(index, lampDummy.matrix);
+    lampHeads.setMatrixAt(index, lampDummy.matrix);
+
+    lampDummy.position.set(lamp.poolX, lamp.y + 0.11, lamp.poolZ);
+    lampDummy.updateMatrix();
+    lampPools.setMatrixAt(index, lampDummy.matrix);
+  });
+  lampPosts.instanceMatrix.needsUpdate = true;
+  lampHeads.instanceMatrix.needsUpdate = true;
+  lampPools.instanceMatrix.needsUpdate = true;
+  group.add(lampPosts, lampHeads, lampPools);
+
+  /* --------------------------- traffic lights -------------------------- */
+  // Signal heads at the intersections of the avenues that the cars use. The
+  // three bulbs are instances of one mesh and their colours are refreshed only
+  // when the phase changes (about every 3 s).
+  const verticalLines = Array.from(
+    new Set(roadSegments.filter((road) => road.axis === 'z').map((road) => road.line))
+  ).filter((line) => Math.abs(line) <= 1900);
+  const horizontalLines = Array.from(
+    new Set(roadSegments.filter((road) => road.axis === 'x').map((road) => road.line))
+  ).filter((line) => Math.abs(line) <= 1900);
+
+  interface SignalSpot {
+    x: number;
+    z: number;
+    group: number;
+  }
+  const signalSpots: SignalSpot[] = [];
+  for (let vi = 0; vi < verticalLines.length; vi++) {
+    for (let hi = 0; hi < horizontalLines.length; hi++) {
+      const x = verticalLines[vi];
+      const z = horizontalLines[hi];
+      if (Math.abs(x) + Math.abs(z) > 3400) continue;
+      signalSpots.push({ x, z, group: (vi + hi) % 2 });
+    }
+  }
+
+  const signalPostGeometry =
+    mergeGeometries(
+      [
+        new THREE.CylinderGeometry(0.11, 0.15, 4.9, 6).translate(0, 2.45, 0).toNonIndexed(),
+        new THREE.BoxGeometry(0.46, 1.3, 0.4).translate(0, 4.4, 0).toNonIndexed()
+      ],
+      false
+    ) ?? new THREE.CylinderGeometry(0.14, 0.18, 4.9, 6);
+  const signalPostMaterial = new THREE.MeshStandardMaterial({
+    color: 0x242a30,
+    roughness: 0.55,
+    metalness: 0.5
+  });
+  const signalBulbGeometry = new THREE.BoxGeometry(0.26, 0.26, 0.52);
+  const signalBulbMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  disposables.push(
+    signalPostGeometry,
+    signalPostMaterial,
+    signalBulbGeometry,
+    signalBulbMaterial
+  );
+
+  const signalPosts = new THREE.InstancedMesh(
+    signalPostGeometry,
+    signalPostMaterial,
+    signalSpots.length
+  );
+  signalPosts.name = 'trafficLightPosts';
+  signalPosts.frustumCulled = false;
+  const signalBulbs = new THREE.InstancedMesh(
+    signalBulbGeometry,
+    signalBulbMaterial,
+    signalSpots.length * 3
+  );
+  signalBulbs.name = 'trafficLightBulbs';
+  signalBulbs.frustumCulled = false;
+
+  const signalOn = [
+    new THREE.Color(0xff3524),
+    new THREE.Color(0xffb52e),
+    new THREE.Color(0x37ff7a)
+  ];
+  const signalOff = [
+    new THREE.Color(0x2a1310),
+    new THREE.Color(0x2a2110),
+    new THREE.Color(0x0f2a18)
+  ];
+  signalSpots.forEach((spot, index) => {
+    const baseX = spot.x + 15;
+    const baseZ = spot.z + 15;
+    const groundY = terrainHeight(baseX, baseZ);
+    lampDummy.position.set(baseX, groundY + 0.05, baseZ);
+    lampDummy.rotation.set(0, Math.PI / 4, 0);
+    lampDummy.updateMatrix();
+    signalPosts.setMatrixAt(index, lampDummy.matrix);
+
+    for (let slot = 0; slot < 3; slot++) {
+      lampDummy.position.set(baseX, groundY + 4.03 + slot * 0.37, baseZ);
+      lampDummy.rotation.set(0, Math.PI / 4, 0);
+      lampDummy.updateMatrix();
+      signalBulbs.setMatrixAt(index * 3 + slot, lampDummy.matrix);
+      signalBulbs.setColorAt(index * 3 + slot, signalOff[slot]);
+    }
+  });
+  signalPosts.instanceMatrix.needsUpdate = true;
+  signalBulbs.instanceMatrix.needsUpdate = true;
+  if (signalBulbs.instanceColor) signalBulbs.instanceColor.needsUpdate = true;
+  group.add(signalPosts, signalBulbs);
+
+  const applySignals = (time: number) => {
+    const t = time % 26;
+    const greenA = t < 10;
+    const amberA = t >= 10 && t < 13;
+    const greenB = t >= 13 && t < 23;
+    const amberB = t >= 23;
+    const stateA = greenA ? 2 : amberA ? 1 : 0;
+    const stateB = greenB ? 2 : amberB ? 1 : 0;
+    const key = `${stateA}${stateB}`;
+    if (key === signalKey) return;
+    signalKey = key;
+    for (let i = 0; i < signalSpots.length; i++) {
+      const state = signalSpots[i].group === 0 ? stateA : stateB;
+      const base = i * 3;
+      for (let slot = 0; slot < 3; slot++) {
+        const on =
+          (state === 2 && slot === 2) ||
+          (state === 1 && slot === 1) ||
+          (state === 0 && slot === 0);
+        signalBulbs.setColorAt(base + slot, on ? signalOn[slot] : signalOff[slot]);
+      }
+    }
+    if (signalBulbs.instanceColor) signalBulbs.instanceColor.needsUpdate = true;
+  };
+  let signalKey = '';
+  let lifeClock = 0;
+  applySignals(0);
 
   const lifeDummy = new THREE.Object3D();
 
@@ -1725,7 +1992,15 @@ export function buildWorld(
     }
   };
 
-  const updateCityLife = (dt: number) => {
+  const updateCityLife = (dt: number, daylight: number) => {
+    lifeClock += dt;
+    applySignals(lifeClock);
+
+    const night = 1 - THREE.MathUtils.clamp(daylight, 0, 1);
+    const showPools = night > 0.06;
+    if (lampPools.visible !== showPools) lampPools.visible = showPools;
+    poolMaterial.opacity = 0.34 * night * night;
+
     for (let i = 0; i < people.length; i++) {
       people[i].phase += dt * (4.5 + people[i].speed * 1.6);
     }
@@ -1738,7 +2013,7 @@ export function buildWorld(
     carMesh.instanceMatrix.needsUpdate = true;
     personMesh.instanceMatrix.needsUpdate = true;
   };
-  updateCityLife(0);
+  updateCityLife(0, 1);
 
   /* -------------------------- remote airports -------------------------- */
   // Reuse the streamed 4K asphalt/concrete maps when available so every
@@ -1789,7 +2064,7 @@ export function buildWorld(
   const nightCloud = new THREE.Color(0x1a2433);
 
   const update = (dt: number, daylight: number) => {
-    updateCityLife(dt);
+    updateCityLife(dt, daylight);
 
     if (waterNormalTexture) {
       waterOffset.x = (waterOffset.x + dt * 0.013) % 1;
