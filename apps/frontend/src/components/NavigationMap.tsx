@@ -25,10 +25,15 @@ export function NavigationMap({ state, onSelectAirport }: NavigationMapProps) {
     const pz = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, state.position.z));
     const point = toMap(px, pz);
     const home = toMap(HOME_AIRPORT.x, HOME_AIRPORT.z);
+    // True compass heading of the player triangle (0° = north, up on the
+    // map). Same mirrored-yaw correction as FlightHUD: the forward vector is
+    // (sin yaw, 0, cos yaw) with +Z south, so heading = 180° - yaw.
+    const headingDeg =
+      (((180 - (state.rotation.y * 180) / Math.PI) % 360) + 360) % 360;
     return {
       ...point,
       home,
-      headingDeg: (state.rotation.y * 180) / Math.PI,
+      headingDeg,
     };
   }, [state.position.x, state.position.z, state.rotation.y]);
 
@@ -117,7 +122,7 @@ export function NavigationMap({ state, onSelectAirport }: NavigationMapProps) {
           style={{
             left: `${player.x}px`,
             top: `${player.y}px`,
-            transform: `rotate(${player.headingDeg + 180}deg)`,
+            transform: `rotate(${player.headingDeg}deg)`,
           }}
         >
           <div className="h-full w-full bg-emerald-300 [clip-path:polygon(50%_0%,0%_100%,100%_100%)]" />

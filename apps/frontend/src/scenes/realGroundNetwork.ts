@@ -48,15 +48,13 @@ export const REAL_AIRPORT_LAYOUT = {
  * through them is the runway direction. Origin is HOME_AIRPORT lat/lon,
  * the same origin ReorientationPlugin centres the Google tiles on.
  *
- * Frame note: geoToLocal maps the thresholds to an axis of (0.861, -0.509),
- * but the tiles as rendered appear mirrored north-south relative to
- * geoToLocal — on screen the runway axis is (0.861, +0.509), exactly the
- * project's (sin, cos) heading convention for 59.4°. The Z component is
- * therefore flipped below. Evidence, visual test 2026-11-18: with the
- * unflipped axis the player spawned ~2 km from the real runway, on dirt
- * beside a taxiway; with the flip the spawn lands ~430 m from the 05L
- * physical end, on the runway centreline. If a future visual test shows
- * the network on the wrong side of the tiles, remove the flip.
+ * No axis flip is applied: geoToLocal maps the thresholds to the axis
+ * (0.861, -0.509), whose true compass bearing is 59.4°, and that is the
+ * runway as rendered in the tiles. An earlier version flipped Z (assuming
+ * the tiles were mirrored north-south); the visual test 2026-11-18
+ * refuted it — with the flip the player spawned at (-1751, -702), 1.2 km
+ * from the real runway, floating over city rooftops (image-92). The
+ * correct spawn is (-1751, +702), the south-west end.
  */
 const THRESHOLD_05L = { lat: 19 + 25.78 / 60, lon: -(99 + 5.2 / 60) };
 const THRESHOLD_23R = { lat: 19 + 26.6 / 60, lon: -(99 + 3.74 / 60) };
@@ -66,12 +64,12 @@ const _t23 = geoToLocal(THRESHOLD_23R.lat, THRESHOLD_23R.lon, TILE_ORIGIN);
 export const REAL_RUNWAY_CENTER = new THREE.Vector3(
   (_t05.x + _t23.x) / 2,
   0,
-  -(_t05.z + _t23.z) / 2
+  (_t05.z + _t23.z) / 2
 );
 export const REAL_RUNWAY_DIR = new THREE.Vector3(
   _t23.x - _t05.x,
   0,
-  -(_t23.z - _t05.z)
+  _t23.z - _t05.z
 ).normalize();
 /** 05L displaced threshold (SkyVector: 1476 ft ≈ 450 m). The player spawns here, on asphalt. */
 export const REAL_RUNWAY_DISPLACED_M = 450;

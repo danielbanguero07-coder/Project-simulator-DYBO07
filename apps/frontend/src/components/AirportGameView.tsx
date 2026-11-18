@@ -7,6 +7,7 @@ import FlightHUD from '@/components/FlightHUD';
 import { NavigationMap } from '@/components/NavigationMap';
 import { FlightPhysics, type FlightState } from '@/scenes/flightPhysics';
 import { TimeManager } from '@/scenes/timeSystem';
+import { APP_VERSION } from '@/version';
 import {
   REAL_RUNWAY_CENTER,
   REAL_RUNWAY_DIR,
@@ -235,20 +236,29 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     demoRef.current = handle;
     // Let the physics follow the real terrain/airport elevation, so landing at
     // a remote airport (which sits at 12-220 m) stops on its runway instead of
-    // falling through to the home elevation.
-    physicsRef.current.setGroundSampler((x, z) => handle.heightAt(x, z));
+    // falling through to the home elevation. In real mode the Google tiles
+    // are recentred so the ground at MEX is Y = 0, so the sampler returns 0
+    // instead of the procedural terrain height (which would float the aircraft
+    // over the real runway and city).
+    const isRealWorldMode =
+      new URLSearchParams(window.location.search).get('world') === 'real';
+    physicsRef.current.setGroundSampler(
+      isRealWorldMode ? () => 0 : (x, z) => handle.heightAt(x, z)
+    );
 
     // In real mode, re-anchor the player to the real MEX runway 05L/23R
-    // (heading 59.4°, ~3952 m). The spawn is the 05L displaced threshold
-    // (on asphalt), not the physical runway end (dirt before the threshold),
-    // and it uses the threshold-anchored runway centre, not the airport
-    // reference point. The real ground is recentred to Y = 0.
+    // (~3952 m). The spawn is the 05L displaced threshold (on asphalt), not
+    // the physical runway end (dirt before the threshold), and it uses the
+    // threshold-anchored runway centre, not the airport reference point.
+    // The yaw comes from the runway direction itself: in the codebase's yaw
+    // convention that is 120.6°, which is the true compass heading 059°
+    // (see FlightHUD).
     // TODO: real heightAt and takeoff/landing with real terrain heights arrive
-    // in the next phase; physics still samples the procedural heightAt.
-    if (new URLSearchParams(window.location.search).get('world') === 'real') {
-      const headingDeg = 59.4;
-      const yaw = (headingDeg * Math.PI) / 180;
+    // in the next phase; physics still samples the procedural heightAt in
+    // procedural mode.
+    if (isRealWorldMode) {
       const halfLength = 3952 / 2;
+      const yaw = Math.atan2(REAL_RUNWAY_DIR.x, REAL_RUNWAY_DIR.z);
       const spawn = REAL_RUNWAY_CENTER.clone().addScaledVector(
         REAL_RUNWAY_DIR,
         -(halfLength - REAL_RUNWAY_DISPLACED_M)
@@ -718,6 +728,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
             <div className="space-y-0.5 text-slate-400">
               <div className="flex justify-between"><span>GPU</span><span className={stats.integratedGpu ? 'text-amber-400' : 'text-emerald-400'}>{stats.gpu || 'GTX 1650'}</span></div>
               <div className="flex justify-between"><span>VRAM</span><span className="text-sky-400">{stats.stream ? Math.round(stats.stream.residentBytes / (1024 * 1024)) : 0} MB</span></div>
+              <div className="flex justify-between"><span>VERSIÓN</span><span className="text-emerald-400">v{APP_VERSION}</span></div>
             </div>
             <div className="mt-1.5 pt-1 border-t border-white/5 text-right">
               <button type="button" className="text-slate-500 hover:text-amber-400 pointer-events-auto" onClick={logout}>SALIR ({username})</button>

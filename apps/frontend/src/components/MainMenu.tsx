@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useGame } from '@/store/gameStore';
 import { SettingsPanel } from './SettingsPanel';
 import { CreditsModal } from './CreditsModal';
+import { APP_VERSION } from '@/version';
 
 /** Key mappings for flight controls - easily extendable */
 export const FLIGHT_CONTROLS = [
@@ -70,6 +71,7 @@ export function MainMenu({ onStartFlight }: { onStartFlight?: () => void }) {
         <div className="mt-16 text-xs text-slate-500">
           <p>Tecla G: Bajar/levantar tren de aterrizaje | Shift/Ctrl: Throttle</p>
           <p>Press F for Flaps | A/D: Alabeo | W/S: Elevación</p>
+          <p className="mt-2 text-slate-600">Versión v{APP_VERSION}</p>
         </div>
       </div>
 

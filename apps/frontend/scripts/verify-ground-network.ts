@@ -99,37 +99,43 @@ const realNet = buildRealAirportGroundNetwork(realTm);
 checkNetwork('Real MEX network', realTm, realNet);
 
 console.log('Real runway geometry');
-// Same source as the builder: the real runway metadata, NOT
-// HOME_AIRPORT.headingDeg (180°, the procedural runway orientation).
-const realRunway =
-  HOME_AIRPORT.runways.find((r) => r.designator === '05L/23R') ?? HOME_AIRPORT.runways[0];
-const realYaw = (realRunway.headingDeg * Math.PI) / 180;
-const dir = new THREE.Vector3(Math.sin(realYaw), 0, Math.cos(realYaw)).normalize();
+// The anchor is the real 05L/23R threshold geometry (SkyVector), NOT the
+// (sin, cos) heading convention: the codebase's yaw is mirrored vs true
+// compass (forward is (sin yaw, cos yaw) with +Z south), so the runway
+// direction (0.861, -0.509) is NOT (sin 59.4°, cos 59.4°). Its TRUE compass
+// bearing is atan2(east, north) = atan2(dir.x, -dir.z) = 59.4°.
+const dir = REAL_RUNWAY_DIR.clone();
 const center = REAL_RUNWAY_CENTER;
 // Along/perp are measured from the real runway centre, not from (0, 0):
 // the centre is ~440 m west of the airport reference point.
 const alongOf = (p: THREE.Vector3) => p.clone().sub(center).dot(dir);
 const perpOf = (p: THREE.Vector3) =>
   (p.x - center.x) * dir.z - (p.z - center.z) * dir.x;
+const trueBearingDeg = (Math.atan2(dir.x, -dir.z) * 180) / Math.PI;
 check(
   'runway centre is the 05L/23R threshold midpoint, ~440 m west of the ARP',
-  Math.abs(center.x - -437.8) < 2 && Math.abs(center.z - 74.9) < 2,
+  Math.abs(center.x - -437.8) < 2 && Math.abs(center.z - -74.9) < 2,
   `(${center.x.toFixed(1)}, ${center.z.toFixed(1)})`
 );
 check(
   'runway direction matches the threshold geometry (SkyVector)',
-  dir.dot(REAL_RUNWAY_DIR) > 0.999,
-  dir.dot(REAL_RUNWAY_DIR).toFixed(4)
+  Math.abs(dir.x - 0.8607) < 0.001 && Math.abs(dir.z - -0.509) < 0.001,
+  `(${dir.x.toFixed(4)}, ${dir.z.toFixed(4)})`
+);
+check(
+  'runway true compass bearing is 59.4°',
+  Math.abs(trueBearingDeg - 59.4) < 0.5,
+  `${trueBearingDeg.toFixed(1)}°`
 );
 const threshold = realTm.getNode(realNet.runwayThreshold)!.position;
 const end = realTm.getNode(realNet.runwayEnd)!.position;
 const length = threshold.distanceTo(end);
 check('runway length is 3952 m', Math.abs(length - 3952) < 1, `${length.toFixed(1)} m`);
 const runwayVec = end.clone().sub(threshold).normalize();
-check('runway points along heading 59.4°', runwayVec.dot(dir) > 0.999, runwayVec.dot(dir).toFixed(4));
+check('runway points along the threshold axis', runwayVec.dot(dir) > 0.999, runwayVec.dot(dir).toFixed(4));
 check(
   'threshold 05 is the south-west end',
-  threshold.x < 0 && threshold.z < 0,
+  threshold.x < 0 && threshold.z > 0,
   `(${threshold.x.toFixed(0)}, ${threshold.z.toFixed(0)})`
 );
 check(

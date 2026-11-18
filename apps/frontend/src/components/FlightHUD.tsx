@@ -14,7 +14,14 @@ export function FlightHUD({ state, onThrottleChange, onFlapsChange, onToggleGear
   // rotation.x is negative when the nose points up (aircraft faces +Z).
   const pitchDeg = Math.round((-state.rotation.x * 180) / Math.PI);
   const rollDeg = Math.round((state.rotation.z * 180) / Math.PI);
-  const headingDeg = Math.round(((state.rotation.y * 180) / Math.PI + 360) % 360);
+  // True compass heading. The aircraft forward vector is
+  // (sin yaw, 0, cos yaw) with +Z pointing south, so the compass heading is
+  // atan2(east, north) = atan2(sin yaw, -cos yaw) = 180° - yaw. Showing
+  // rotation.y directly was mirrored: facing south read 000° instead of
+  // 180°, and the real 05L takeoff (yaw 120.6°) read 121° instead of 059°.
+  const headingDeg = Math.round(
+    (((180 - (state.rotation.y * 180) / Math.PI) % 360) + 360) % 360
+  );
 
   return (
     <div className="pointer-events-none absolute inset-0 font-mono text-white select-none overflow-hidden">
