@@ -7,6 +7,18 @@ import FlightHUD from '@/components/FlightHUD';
 import { NavigationMap } from '@/components/NavigationMap';
 import { FlightPhysics, type FlightState } from '@/scenes/flightPhysics';
 import { TimeManager } from '@/scenes/timeSystem';
+import {
+  REAL_RUNWAY_CENTER,
+  REAL_RUNWAY_DIR,
+  REAL_RUNWAY_DISPLACED_M
+} from '@/scenes/realGroundNetwork';
+
+/** Remaining runway to the 23R end from (x, z), in real mode. */
+function remainingRealRunwayM(x: number, z: number): number {
+  const endX = REAL_RUNWAY_CENTER.x + 1976 * REAL_RUNWAY_DIR.x;
+  const endZ = REAL_RUNWAY_CENTER.z + 1976 * REAL_RUNWAY_DIR.z;
+  return Math.max(0, Math.round((endX - x) * REAL_RUNWAY_DIR.x + (endZ - z) * REAL_RUNWAY_DIR.z));
+}
 
 export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const { username, logout } = useGame();
@@ -31,6 +43,9 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const [showControlsHelp, setShowControlsHelp] = useState(false);
   const [showMap, setShowMap] = useState(true);
   const [showRadial, setShowRadial] = useState(false);
+  const isRealWorld =
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('world') === 'real';
   const radialRef = useRef(false);
   const radialGateRef = useRef(0);
   const timeManagerRef = useRef<TimeManager>(new TimeManager({ timeScale: 1/60, initialHour: 12 }));
@@ -224,16 +239,21 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     physicsRef.current.setGroundSampler((x, z) => handle.heightAt(x, z));
 
     // In real mode, re-anchor the player to the real MEX runway 05L/23R
-    // (heading 59.4°, ~3952 m). The real ground is recentred to Y = 0.
+    // (heading 59.4°, ~3952 m). The spawn is the 05L displaced threshold
+    // (on asphalt), not the physical runway end (dirt before the threshold),
+    // and it uses the threshold-anchored runway centre, not the airport
+    // reference point. The real ground is recentred to Y = 0.
     // TODO: real heightAt and takeoff/landing with real terrain heights arrive
     // in the next phase; physics still samples the procedural heightAt.
     if (new URLSearchParams(window.location.search).get('world') === 'real') {
       const headingDeg = 59.4;
       const yaw = (headingDeg * Math.PI) / 180;
       const halfLength = 3952 / 2;
-      const x = -halfLength * Math.sin(yaw);
-      const z = -halfLength * Math.cos(yaw);
-      physicsRef.current.state.position.set(x, 0, z);
+      const spawn = REAL_RUNWAY_CENTER.clone().addScaledVector(
+        REAL_RUNWAY_DIR,
+        -(halfLength - REAL_RUNWAY_DISPLACED_M)
+      );
+      physicsRef.current.state.position.set(spawn.x, 0, spawn.z);
       physicsRef.current.state.rotation.y = yaw;
     }
 
@@ -483,19 +503,21 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
         {/* Destination Badge */}
         <div className="rounded-lg border border-white/10 bg-slate-950/60 px-2.5 py-1 backdrop-blur-md">
           <div className="flex items-center gap-2">
-            <span className="text-[9px] uppercase text-slate-400 font-mono">RWY 36L</span>
+            <span className="text-[9px] uppercase text-slate-400 font-mono">{isRealWorld ? 'RWY 05L' : 'RWY 36L'}</span>
             <span className="font-mono text-xs font-bold text-sky-400">
-              {Math.max(0, Math.round(1150 - flightState.position.z))}m
+              {isRealWorld
+                ? `${remainingRealRunwayM(flightState.position.x, flightState.position.z)}m`
+                : `${Math.max(0, Math.round(1150 - flightState.position.z))}m`}
             </span>
             <div className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
           </div>
         </div>
 
-        {/* Simulated tower: who owns runway 36L right now */}
+        {/* Simulated tower: who owns the runway right now */}
         {tower && (
           <div className="w-44 rounded-lg border border-white/10 bg-slate-950/60 p-2 font-mono text-[9px] text-slate-300 backdrop-blur-md">
             <div className="flex justify-between border-b border-white/10 pb-1 mb-1">
-              <span className="font-bold text-white/70">TORRE · RWY 36L</span>
+              <span className="font-bold text-white/70">{isRealWorld ? 'TORRE · RWY 05L' : 'TORRE · RWY 36L'}</span>
               <span
                 className={
                   tower.holder

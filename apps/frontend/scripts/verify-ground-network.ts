@@ -21,7 +21,10 @@ import {
 } from '../src/scenes/groundNetwork';
 import {
   buildRealAirportGroundNetwork,
-  REAL_AIRPORT_LAYOUT
+  REAL_AIRPORT_LAYOUT,
+  REAL_RUNWAY_CENTER,
+  REAL_RUNWAY_DIR,
+  REAL_RUNWAY_DISPLACED_M
 } from '../src/scenes/realGroundNetwork';
 import { HOME_AIRPORT } from '../src/scenes/airports';
 
@@ -102,6 +105,22 @@ const realRunway =
   HOME_AIRPORT.runways.find((r) => r.designator === '05L/23R') ?? HOME_AIRPORT.runways[0];
 const realYaw = (realRunway.headingDeg * Math.PI) / 180;
 const dir = new THREE.Vector3(Math.sin(realYaw), 0, Math.cos(realYaw)).normalize();
+const center = REAL_RUNWAY_CENTER;
+// Along/perp are measured from the real runway centre, not from (0, 0):
+// the centre is ~440 m west of the airport reference point.
+const alongOf = (p: THREE.Vector3) => p.clone().sub(center).dot(dir);
+const perpOf = (p: THREE.Vector3) =>
+  (p.x - center.x) * dir.z - (p.z - center.z) * dir.x;
+check(
+  'runway centre is the 05L/23R threshold midpoint, ~440 m west of the ARP',
+  Math.abs(center.x - -437.8) < 2 && Math.abs(center.z - 74.9) < 2,
+  `(${center.x.toFixed(1)}, ${center.z.toFixed(1)})`
+);
+check(
+  'runway direction matches the threshold geometry (SkyVector)',
+  dir.dot(REAL_RUNWAY_DIR) > 0.999,
+  dir.dot(REAL_RUNWAY_DIR).toFixed(4)
+);
 const threshold = realTm.getNode(realNet.runwayThreshold)!.position;
 const end = realTm.getNode(realNet.runwayEnd)!.position;
 const length = threshold.distanceTo(end);
@@ -114,15 +133,31 @@ check(
   `(${threshold.x.toFixed(0)}, ${threshold.z.toFixed(0)})`
 );
 check(
-  'player spawn (-halfLength along dir) is the 05 threshold',
-  threshold.distanceTo(dir.clone().multiplyScalar(-REAL_AIRPORT_LAYOUT.runwayLengthM / 2)) < 1,
+  'threshold 05 is centre minus halfLength along dir',
+  threshold.distanceTo(center.clone().addScaledVector(dir, -REAL_AIRPORT_LAYOUT.runwayLengthM / 2)) < 1,
   `(${threshold.x.toFixed(0)}, ${threshold.z.toFixed(0)})`
 );
+const spawn = center
+  .clone()
+  .addScaledVector(dir, -(REAL_AIRPORT_LAYOUT.runwayLengthM / 2 - REAL_RUNWAY_DISPLACED_M));
+check(
+  'player spawn (05L displaced threshold) is on the runway centreline',
+  Math.abs(perpOf(spawn)) < 1,
+  `${perpOf(spawn).toFixed(1)} m off centreline`
+);
+check(
+  'player spawn is 450 m past the physical 05 end',
+  Math.abs(spawn.distanceTo(threshold) - REAL_RUNWAY_DISPLACED_M) < 1,
+  `${spawn.distanceTo(threshold).toFixed(1)} m`
+);
+check(
+  'player spawn is on asphalt: remaining runway to the 23R end is 3502 m',
+  Math.abs(end.clone().sub(spawn).dot(dir) - 3502) < 1,
+  `${end.clone().sub(spawn).dot(dir).toFixed(1)} m`
+);
 const gate1 = realTm.getNode(realNet.gates[0].gateNode)!.position;
-const gate1Along = gate1.dot(dir);
-const gate1Perp = gate1.x * dir.z - gate1.z * dir.x;
-check('gate 1 sits ~130 m off the runway centreline', Math.abs(Math.abs(gate1Perp) - 130) < 1, `${gate1Perp.toFixed(1)} m`);
-check('gate 1 is at along -180 m', Math.abs(gate1Along - -180) < 1, `${gate1Along.toFixed(1)} m`);
+check('gate 1 sits ~130 m off the runway centreline', Math.abs(Math.abs(perpOf(gate1)) - 130) < 1, `${perpOf(gate1).toFixed(1)} m`);
+check('gate 1 is at along -180 m', Math.abs(alongOf(gate1) - -180) < 1, `${alongOf(gate1).toFixed(1)} m`);
 
 console.log('Ambient traffic on the real network');
 realTm.seedAmbientTraffic(8);
@@ -132,8 +167,8 @@ check(
   'all spawned vehicles stand on the real service lane',
   vehicles.every((v) => {
     const p = v.object.position;
-    const along = p.dot(dir);
-    const perp = p.x * dir.z - p.z * dir.x;
+    const along = alongOf(p);
+    const perp = perpOf(p);
     return along >= -600 && along <= 900 && Math.abs(perp) > 100 && Math.abs(perp) < 200;
   })
 );

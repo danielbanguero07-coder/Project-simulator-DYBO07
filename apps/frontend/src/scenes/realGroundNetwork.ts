@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { TrafficManager } from './trafficManager';
 import { HOME_AIRPORT } from './airports';
+import { geoToLocal } from './geo';
 import type { GroundNetwork } from './groundNetwork';
 
 /**
@@ -14,7 +15,10 @@ import type { GroundNetwork } from './groundNetwork';
  * TODO: real heightAt terrain sampling and takeoff/landing on real terrain
  * heights arrive in the next phase; this phase keeps procedural heightAt.
  *
- * Gate line position: apron is taken ~130 m perpendicular to the runway
+ * Runway anchor: the axis and centre come from the real displaced
+ * thresholds of 05L/23R (see REAL_RUNWAY_CENTER below), so the network
+ * sits on the runway as rendered in the Google tiles. The gate line is
+ * still approximate: the apron is taken ~130 m perpendicular to the runway
  * (runwayPerp direction), gates spaced ~80 m along the runway direction,
  * matching the procedural gateZ spacing. Terminal location is approximate
  * (no verified OSM coordinate was available at implementation time) and is
@@ -35,19 +39,55 @@ export const REAL_AIRPORT_LAYOUT = {
   gateSpacingAlongM: 80
 };
 
+/**
+ * Anchor of the real 05L/23R runway in scene coordinates, derived from the
+ * displaced thresholds published by SkyVector for MMMX:
+ *   05L: N19°25.78' W99°5.20'   (displaced threshold 1476 ft ≈ 450 m)
+ *   23R: N19°26.60' W99°3.74'   (displaced threshold 1660 ft ≈ 506 m)
+ * The midpoint of the two thresholds is the runway centre; the axis
+ * through them is the runway direction. Origin is HOME_AIRPORT lat/lon,
+ * the same origin ReorientationPlugin centres the Google tiles on.
+ *
+ * Frame note: geoToLocal maps the thresholds to an axis of (0.861, -0.509),
+ * but the tiles as rendered appear mirrored north-south relative to
+ * geoToLocal — on screen the runway axis is (0.861, +0.509), exactly the
+ * project's (sin, cos) heading convention for 59.4°. The Z component is
+ * therefore flipped below. Evidence, visual test 2026-11-18: with the
+ * unflipped axis the player spawned ~2 km from the real runway, on dirt
+ * beside a taxiway; with the flip the spawn lands ~430 m from the 05L
+ * physical end, on the runway centreline. If a future visual test shows
+ * the network on the wrong side of the tiles, remove the flip.
+ */
+const THRESHOLD_05L = { lat: 19 + 25.78 / 60, lon: -(99 + 5.2 / 60) };
+const THRESHOLD_23R = { lat: 19 + 26.6 / 60, lon: -(99 + 3.74 / 60) };
+const TILE_ORIGIN = { lat: HOME_AIRPORT.lat, lon: HOME_AIRPORT.lon };
+const _t05 = geoToLocal(THRESHOLD_05L.lat, THRESHOLD_05L.lon, TILE_ORIGIN);
+const _t23 = geoToLocal(THRESHOLD_23R.lat, THRESHOLD_23R.lon, TILE_ORIGIN);
+export const REAL_RUNWAY_CENTER = new THREE.Vector3(
+  (_t05.x + _t23.x) / 2,
+  0,
+  -(_t05.z + _t23.z) / 2
+);
+export const REAL_RUNWAY_DIR = new THREE.Vector3(
+  _t23.x - _t05.x,
+  0,
+  -(_t23.z - _t05.z)
+).normalize();
+/** 05L displaced threshold (SkyVector: 1476 ft ≈ 450 m). The player spawns here, on asphalt. */
+export const REAL_RUNWAY_DISPLACED_M = 450;
+
 export function buildRealAirportGroundNetwork(tm: TrafficManager): GroundNetwork {
-  // Direction and length come from the REAL runway metadata (05L/23R,
-  // 59.4°, 3952 m). Do NOT use HOME_AIRPORT.headingDeg here: that is the
-  // procedural runway orientation (180°, north-south), and using it would
-  // build this network on the wrong axis. Same convention as runwayDir in
-  // airNetwork.ts: heading clockwise from +Z.
+  // Direction and centre come from the real 05L/23R thresholds (see
+  // REAL_RUNWAY_CENTER / REAL_RUNWAY_DIR above), NOT from
+  // HOME_AIRPORT.headingDeg (180°, the procedural runway orientation) and
+  // NOT from the airport reference point (0, 0): the real runway centre is
+  // ~440 m west of it. The length still comes from the runway metadata.
   const realRunway =
     HOME_AIRPORT.runways.find((r) => r.designator === '05L/23R') ?? HOME_AIRPORT.runways[0];
-  const yaw = (realRunway.headingDeg * Math.PI) / 180;
-  const dir = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)).normalize();
+  const dir = REAL_RUNWAY_DIR.clone();
   const perp = new THREE.Vector3(dir.z, 0, -dir.x).normalize();
 
-  const center = new THREE.Vector3(0, 0, 0);
+  const center = REAL_RUNWAY_CENTER.clone();
   const halfLen = realRunway.lengthM / 2;
 
   const along = (t: number) => center.clone().addScaledVector(dir, t);
