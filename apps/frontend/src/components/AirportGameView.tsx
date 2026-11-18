@@ -74,7 +74,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const getTrafficMarkers = useCallback(() => demoRef.current?.getTrafficMarkers() ?? [], []);
 
   const cycleCamera = useCallback(() => {
-    const modes = ['AIRCRAFT_FOLLOW', 'COCKPIT_VIEW', 'FREE_ORBIT', 'PARKING_VIEW'] as const;
+    const modes = ['AIRCRAFT_FOLLOW', 'COCKPIT_VIEW', 'FREE_ORBIT', 'PARKING_VIEW', 'AI_FOLLOW'] as const;
     const current = demoRef.current?.getCameraMode() ?? 'AIRCRAFT_FOLLOW';
     const index = modes.indexOf(current as (typeof modes)[number]);
     demoRef.current?.setCameraMode(modes[(index + 1) % modes.length]);
@@ -907,13 +907,14 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
             <span className="text-[9px] uppercase text-slate-400 font-mono">Cámara</span>
             <select
               className="bg-slate-900 border border-white/10 rounded text-white text-[9px] font-mono px-1.5 py-0.5 focus:outline-none focus:border-sky-400"
-              onChange={(e) => demoRef.current?.setCameraMode(e.target.value as 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW')}
+              onChange={(e) => demoRef.current?.setCameraMode(e.target.value as 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW' | 'AI_FOLLOW')}
               title="Cambia modo de cámara (C para alternar)"
             >
               <option value="AIRCRAFT_FOLLOW">📷 Seguir Avión</option>
               <option value="FREE_ORBIT">🔄 Orbita Libre</option>
               <option value="COCKPIT_VIEW">👁️ Vista Cabina</option>
               <option value="PARKING_VIEW">🅿️ Vista Parking</option>
+              <option value="AI_FOLLOW">🛩️ Seguir IA</option>
             </select>
           </div>
           <div className="text-[8px] text-slate-500 mt-0.5">C: Alternar | Mouse: Orbitar (FREE/PARKING)</div>

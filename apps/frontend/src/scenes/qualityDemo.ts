@@ -11,6 +11,7 @@ import { TrafficManager, type PathNode } from './trafficManager';
 import { buildAirportGroundNetwork, validateGroundNetwork, AIRPORT_LAYOUT } from './groundNetwork';
 import { createRunwayMaterial } from './runwayMaterial';
 import { mergeTrafficMarkers, type MapAircraft } from './mapMarkers';
+import { aiFollowPose } from './cameraFollow';
 import { buildRealAirportGroundNetwork, REAL_RUNWAY_DIR } from './realGroundNetwork';
 import { buildRealAirNetwork } from './realAirNetwork';
 import { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights } from './airportLights';
@@ -85,7 +86,7 @@ export interface QualityDemoHandle {
   focusAirport: (x: number, z: number, elevation: number) => void;
   /** Frame one terminal stand and its boarding bridge (1-8). */
   focusGate: (gateId: number) => void;
-  setCameraMode: (mode: 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW') => void;
+  setCameraMode: (mode: 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW' | 'AI_FOLLOW') => void;
   getCameraMode: () => string;
   setTime: (hour: number) => void;
   getTime: () => number;
@@ -118,7 +119,7 @@ export interface QualityDemoHandle {
   getTrafficMarkers: () => MapAircraft[];
 }
 
-type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
+type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW' | 'AI_FOLLOW';
 
 export function createQualityDemo(
   container: HTMLElement,
@@ -1518,11 +1519,33 @@ export function createQualityDemo(
 
     controls.enabled = false;
 
+    // AI follow chases the first en-route aircraft (the test flight in real
+    // mode). When there is no AI aircraft it falls back to the player's own
+    // aircraft instead of leaving the camera stuck.
+    let followPosition = aircraft.position;
+    let followYaw = aircraft.rotation.y;
+    let directTracking = false;
+    if (cameraMode === 'AI_FOLLOW') {
+      const pose = routeTraffic.getFirstAgentPose();
+      if (pose) {
+        followPosition = pose.position;
+        followYaw = pose.yaw;
+        directTracking = true;
+      }
+    }
+
     // Follow / cockpit use yaw only so the camera never rolls with the plane.
-    tmpEuler.set(0, aircraft.rotation.y, 0, 'YXZ');
+    tmpEuler.set(0, followYaw, 0, 'YXZ');
     yawQuat.setFromEuler(tmpEuler);
 
-    if (cameraMode === 'AIRCRAFT_FOLLOW') {
+    if (directTracking) {
+      // Direct tracking, no smoothing: at 60x en route the aircraft covers
+      // ~120 m per frame and any lerp would trail kilometres behind.
+      const follow = aiFollowPose(followPosition, followYaw);
+      camera.position.copy(follow.camera);
+      controls.target.copy(follow.target);
+      camera.lookAt(controls.target);
+    } else if (cameraMode === 'AIRCRAFT_FOLLOW') {
       tmpVec.copy(followOffset).applyQuaternion(yawQuat).add(aircraft.position);
       const k = 1 - Math.exp(-4 * dt);
       camera.position.lerp(tmpVec, k);

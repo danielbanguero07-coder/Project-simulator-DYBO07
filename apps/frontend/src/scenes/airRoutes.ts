@@ -320,6 +320,16 @@ export class RouteTraffic {
   }
 
   /**
+   * Live pose of the first en-route aircraft (the test flight in real mode),
+   * for the AI-follow camera. Null when there is no aircraft.
+   */
+  getFirstAgentPose(): { position: THREE.Vector3; yaw: number } | null {
+    const agent = this.agents[0];
+    if (!agent) return null;
+    return { position: agent.object.position.clone(), yaw: agent.object.rotation.y };
+  }
+
+  /**
    * Stand position for a MEX gate: the real gate from the ground network
    * in real mode, the procedural stand (x = 130) otherwise. The returned
    * vector is a fresh copy at the airport elevation + 2 m.
