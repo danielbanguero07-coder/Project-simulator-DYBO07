@@ -231,8 +231,8 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
       const headingDeg = 59.4;
       const yaw = (headingDeg * Math.PI) / 180;
       const halfLength = 3952 / 2;
-      const x = halfLength * Math.sin(yaw);
-      const z = halfLength * Math.cos(yaw);
+      const x = -halfLength * Math.sin(yaw);
+      const z = -halfLength * Math.cos(yaw);
       physicsRef.current.state.position.set(x, 0, z);
       physicsRef.current.state.rotation.y = yaw;
     }

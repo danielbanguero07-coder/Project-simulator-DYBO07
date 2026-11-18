@@ -9,6 +9,7 @@ import { TextureStreamer, type TextureQualityCap } from './textureStreaming';
 import { WorldManager } from './worldManager';
 import { TrafficManager, type PathNode } from './trafficManager';
 import { buildAirportGroundNetwork, validateGroundNetwork, AIRPORT_LAYOUT } from './groundNetwork';
+import { buildRealAirportGroundNetwork } from './realGroundNetwork';
 import { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights } from './airportLights';
 import { createHomeAirportSigns } from './airportSigns';
 import { createApronMarkings } from './apronMarkings';
@@ -747,10 +748,10 @@ export function createQualityDemo(
   // Each bridge swings and telescopes from its rotunda, so it docks to any
   // aircraft parked on the stand (player or AI) and stows when the stand is
   // empty.
-  const jetways = new JetwaySystem(scene, AIRPORT_LAYOUT.gateZ);
+  const jetways = new JetwaySystem(airportGroup as unknown as THREE.Scene, AIRPORT_LAYOUT.gateZ);
   // Passengers walking to the bridge and baggage carts shuttling around the
   // stand. Two instanced draw calls total, driven by the boarding progress.
-  const boarding = new BoardingSystem(scene, AIRPORT_LAYOUT.gateZ);
+  const boarding = new BoardingSystem(airportGroup as unknown as THREE.Scene, AIRPORT_LAYOUT.gateZ);
   // Pushback tug: shown attached to the nose while the player is being
   // pushed back. Two small meshes, no lights.
   const pushbackTug = new THREE.Group();
@@ -1109,7 +1110,8 @@ export function createQualityDemo(
 
   // ===== GROUND TRAFFIC NETWORK =====
   // Full aircraft + vehicle graph (see groundNetwork.ts for the layout).
-  const network = buildAirportGroundNetwork(trafficManager);
+  let network = buildAirportGroundNetwork(trafficManager);
+  let realNetwork: ReturnType<typeof buildRealAirportGroundNetwork> | null = null;
 
   // Service roads (vehicles only) so the AI paths are visible in the scene.
   const serviceRoadMat = new THREE.MeshStandardMaterial({
@@ -1121,19 +1123,19 @@ export function createQualityDemo(
   serviceLane.rotation.x = -Math.PI / 2;
   serviceLane.position.set(160, 0.05, 160);
   serviceLane.receiveShadow = true;
-  scene.add(serviceLane);
+  airportGroup.add(serviceLane);
 
   const fuelRoad = new THREE.Mesh(new THREE.PlaneGeometry(40, 8), serviceRoadMat);
   fuelRoad.rotation.x = -Math.PI / 2;
   fuelRoad.position.set(175, 0.05, 850);
   fuelRoad.receiveShadow = true;
-  scene.add(fuelRoad);
+  airportGroup.add(fuelRoad);
 
   const depotRoad = new THREE.Mesh(new THREE.PlaneGeometry(8, 50), serviceRoadMat);
   depotRoad.rotation.x = -Math.PI / 2;
   depotRoad.position.set(160, 0.05, -215);
   depotRoad.receiveShadow = true;
-  scene.add(depotRoad);
+  airportGroup.add(depotRoad);
 
   // Gate lead-in lines (yellow)
   const standPaint = new THREE.MeshStandardMaterial({ color: 0xe0b21c, roughness: 0.6 });
@@ -1147,11 +1149,11 @@ export function createQualityDemo(
     );
     line.rotation.x = -Math.PI / 2;
     line.position.set((fromX + stand.position.x) / 2, 0.1, stand.position.z);
-    scene.add(line);
+    airportGroup.add(line);
   });
 
   // Apron markings: stand numbers, stop bars and platform edges.
-  scene.add(createApronMarkings());
+  airportGroup.add(createApronMarkings());
 
   // Fuel farm: two storage tanks + bund wall, at the north end of the
   // service lane so the parallel taxiway stays clear.
@@ -1161,17 +1163,17 @@ export function createQualityDemo(
     tank.position.set(x, 4, z);
     tank.castShadow = true;
     tank.receiveShadow = true;
-    scene.add(tank);
+    airportGroup.add(tank);
     const cap = new THREE.Mesh(new THREE.CylinderGeometry(7.2, 7.2, 0.6, 24), tankMat);
     cap.position.set(x, 8.2, z);
-    scene.add(cap);
+    airportGroup.add(cap);
   }
   const bund = new THREE.Mesh(
     new THREE.BoxGeometry(46, 1.4, 24),
     new THREE.MeshStandardMaterial({ color: 0x8c9299, roughness: 0.9 })
   );
   bund.position.set(190, 0.7, 850);
-  scene.add(bund);
+  airportGroup.add(bund);
 
   // Baggage / catering depot building
   const depotBuilding = new THREE.Mesh(
@@ -1181,19 +1183,19 @@ export function createQualityDemo(
   depotBuilding.position.set(186, 4.5, -232);
   depotBuilding.castShadow = true;
   depotBuilding.receiveShadow = true;
-  scene.add(depotBuilding);
+  airportGroup.add(depotBuilding);
   const depotDoor = new THREE.Mesh(
     new THREE.PlaneGeometry(14, 6),
     new THREE.MeshStandardMaterial({ color: 0x3b4249, roughness: 0.8 })
   );
   depotDoor.rotation.y = -Math.PI / 2;
   depotDoor.position.set(170.9, 3, -232);
-  scene.add(depotDoor);
+  airportGroup.add(depotDoor);
 
   // ===== RUNWAY, TAXIWAY & PAPI LIGHTS =====
   const runwayLighting = createRunwayLights({ thresholdZ: -1150, length: 2300 });
   setPapiGroup(runwayLighting.papi);
-  scene.add(runwayLighting.group);
+  airportGroup.add(runwayLighting.group);
 
   const allStandZ = [
     ...AIRPORT_LAYOUT.remoteGateZ,
@@ -1208,15 +1210,15 @@ export function createQualityDemo(
     exitZ: AIRPORT_LAYOUT.runwayExitZ,
     exitDrop: AIRPORT_LAYOUT.runwayExitDrop
   });
-  scene.add(taxiwayLights);
+  airportGroup.add(taxiwayLights);
 
   const jetwayLights = createJetwayLights(AIRPORT_LAYOUT.gateZ);
-  scene.add(jetwayLights);
+  airportGroup.add(jetwayLights);
 
-  scene.add(createHoldLights(holdLightPositions));
+  airportGroup.add(createHoldLights(holdLightPositions));
 
   // Taxiway signage: location, direction and runway holding panels.
-  scene.add(createHomeAirportSigns());
+  airportGroup.add(createHomeAirportSigns());
 
   scheduleManager.initSchedule();
   trafficManager.seedAmbientTraffic(8);
@@ -1515,6 +1517,14 @@ export function createQualityDemo(
       }
       const simGlobal2 = (window as unknown as { __sim?: { realWorld?: RealWorldTiles | null } }).__sim;
       if (simGlobal2) simGlobal2.realWorld = realWorld;
+
+      // Build (once) and cache the real MEX ground network so AI traffic can
+      // use the real runway/taxiway/gates in real mode. TrafficManager keeps
+      // its procedural nodes; real nodes are appended and addressed through
+      // realNetwork. (Full traffic re-anchoring is wired in the next step.)
+      if (!realNetwork) {
+        realNetwork = buildRealAirportGroundNetwork(trafficManager);
+      }
 
       const state = realWorld.enable();
       if (state.status === 'unavailable' || state.status === 'error') {
