@@ -223,6 +223,20 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     // falling through to the home elevation.
     physicsRef.current.setGroundSampler((x, z) => handle.heightAt(x, z));
 
+    // In real mode, re-anchor the player to the real MEX runway 05L/23R
+    // (heading 59.4°, ~3952 m). The real ground is recentred to Y = 0.
+    // TODO: real heightAt and takeoff/landing with real terrain heights arrive
+    // in the next phase; physics still samples the procedural heightAt.
+    if (new URLSearchParams(window.location.search).get('world') === 'real') {
+      const headingDeg = 59.4;
+      const yaw = (headingDeg * Math.PI) / 180;
+      const halfLength = 3952 / 2;
+      const x = halfLength * Math.sin(yaw);
+      const z = halfLength * Math.cos(yaw);
+      physicsRef.current.state.position.set(x, 0, z);
+      physicsRef.current.state.rotation.y = yaw;
+    }
+
     // Dev helper: allows inspecting/stepping the live flight model from the
     // console without depending on the render loop.
     const debugWindow = window as unknown as { __flightPhysics?: FlightPhysics };

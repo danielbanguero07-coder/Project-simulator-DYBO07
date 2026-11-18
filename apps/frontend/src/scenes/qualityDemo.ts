@@ -409,13 +409,15 @@ export function createQualityDemo(
     concreteMaterial: concreteMat
   });
 
+  const airportGroup = new THREE.Group();
+  airportGroup.name = 'proceduralAirport';
   // ===== AIRPORT GEOMETRY =====
   // Runway 36L / 18R
   const runway = new THREE.Mesh(new THREE.PlaneGeometry(46, 2600), asphaltMat);
   runway.rotation.x = -Math.PI / 2;
   runway.position.set(0, 0.06, 0);
   runway.receiveShadow = true;
-  scene.add(runway);
+  airportGroup.add(runway);
 
   // Parallel taxiway Alpha: wide asphalt strip beside the runway, from
   // threshold to threshold.
@@ -423,7 +425,7 @@ export function createQualityDemo(
   alphaTaxiway.rotation.x = -Math.PI / 2;
   alphaTaxiway.position.set(AIRPORT_LAYOUT.taxiwayX, 0.062, 0);
   alphaTaxiway.receiveShadow = true;
-  scene.add(alphaTaxiway);
+  airportGroup.add(alphaTaxiway);
 
   // Four long high-speed exits joining the runway edge to Alpha at 22 degrees.
   const exitRun = 52;
@@ -434,7 +436,7 @@ export function createQualityDemo(
     exit.position.set(20 + exitRun / 2, 0.066, z - exitDrop / 2);
     exit.rotation.y = Math.atan2(exitDrop, exitRun);
     exit.receiveShadow = true;
-    scene.add(exit);
+    airportGroup.add(exit);
   });
 
   // Runway-end taxiway connectors: wide asphalt bands joining each runway
@@ -451,7 +453,7 @@ export function createQualityDemo(
     connector.position.set((start.x + end.x) / 2, 0.064, (start.y + end.y) / 2);
     connector.rotation.y = -Math.atan2(end.y - start.y, end.x - start.x);
     connector.receiveShadow = true;
-    scene.add(connector);
+    airportGroup.add(connector);
   }
 
   // Apron (concrete): starts at the east edge of Alpha and reaches the new
@@ -460,7 +462,7 @@ export function createQualityDemo(
   apron.rotation.x = -Math.PI / 2;
   apron.position.set(213.5, 0.04, 102.5);
   apron.receiveShadow = true;
-  scene.add(apron);
+  airportGroup.add(apron);
 
   // Cross taxilanes: wide asphalt entrance lanes from Alpha into the apron.
   AIRPORT_LAYOUT.crossTaxilaneZ.forEach((z) => {
@@ -468,7 +470,7 @@ export function createQualityDemo(
     lane.rotation.x = -Math.PI / 2;
     lane.position.set(85, 0.07, z);
     lane.receiveShadow = true;
-    scene.add(lane);
+    airportGroup.add(lane);
   });
 
   // Cargo ramp marking: a darker concrete band separates it from the
@@ -480,7 +482,7 @@ export function createQualityDemo(
   cargoRamp.rotation.x = -Math.PI / 2;
   cargoRamp.position.set(210, 0.045, 640);
   cargoRamp.receiveShadow = true;
-  scene.add(cargoRamp);
+  airportGroup.add(cargoRamp);
 
   // Runway centreline + threshold markings
   const paintMat = new THREE.MeshStandardMaterial({ color: 0xf2f2ea, roughness: 0.55 });
@@ -488,17 +490,17 @@ export function createQualityDemo(
     const dash = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 22), paintMat);
     dash.rotation.x = -Math.PI / 2;
     dash.position.set(0, 0.09, -1150 + i * 54);
-    scene.add(dash);
+    airportGroup.add(dash);
   }
   for (let i = 0; i < 8; i++) {
     const x = -18 + i * 5.1;
     const bar = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 26), paintMat);
     bar.rotation.x = -Math.PI / 2;
     bar.position.set(x, 0.09, -1235);
-    scene.add(bar);
+    airportGroup.add(bar);
     const bar2 = bar.clone();
     bar2.position.z = 1235;
-    scene.add(bar2);
+    airportGroup.add(bar2);
   }
 
   // Aiming point: the big pair of bars 400 m from each threshold, distinct
@@ -508,7 +510,7 @@ export function createQualityDemo(
       const aiming = new THREE.Mesh(new THREE.PlaneGeometry(12, 50), paintMat);
       aiming.rotation.x = -Math.PI / 2;
       aiming.position.set(sx * 14, 0.09, end);
-      scene.add(aiming);
+      airportGroup.add(aiming);
     }
   }
 
@@ -528,7 +530,7 @@ export function createQualityDemo(
     }
   }
   shoulderPaint.instanceMatrix.needsUpdate = true;
-  scene.add(shoulderPaint);
+  airportGroup.add(shoulderPaint);
 
   // ===== TAXIWAY PAINT =====
   // Yellow centreline dashes along Alpha, Bravo, the cross taxilanes and
@@ -561,7 +563,7 @@ export function createQualityDemo(
     taxiDashes.setMatrixAt(i, paintDummy.matrix);
   });
   taxiDashes.instanceMatrix.needsUpdate = true;
-  scene.add(taxiDashes);
+  airportGroup.add(taxiDashes);
 
   // Hold-short bars at the taxiway side of every runway entrance. They are
   // rotated so they cross the wide high-speed exit perpendicularly.
@@ -575,7 +577,7 @@ export function createQualityDemo(
       const barZ = z - exitDrop * t;
       bar.position.set(barX, 0.1, barZ);
       bar.rotation.y = holdBarAngle;
-      scene.add(bar);
+      airportGroup.add(bar);
       holdLightPositions.push(new THREE.Vector3(barX, 0.9, barZ));
     });
   });
@@ -595,7 +597,7 @@ export function createQualityDemo(
       const bar = new THREE.Mesh(connectorBarGeometry, taxiPaint);
       bar.position.set(barX, 0.1, barZ);
       bar.rotation.y = barAngle;
-      scene.add(bar);
+      airportGroup.add(bar);
       holdLightPositions.push(new THREE.Vector3(barX, 0.9, barZ));
     });
   }
@@ -628,7 +630,7 @@ export function createQualityDemo(
   terminal.position.set(215, 11, 115);
   terminal.castShadow = true;
   terminal.receiveShadow = true;
-  scene.add(terminal);
+  airportGroup.add(terminal);
 
   // Terminal roof with slight overhang
   const roof = new THREE.Mesh(
@@ -642,7 +644,7 @@ export function createQualityDemo(
   );
   roof.position.set(215, 23, 115);
   roof.castShadow = true;
-  scene.add(roof);
+  airportGroup.add(roof);
 
   // Control tower con emissive en ventanas y paneles.
   const towerBase = new THREE.Mesh(
@@ -656,7 +658,7 @@ export function createQualityDemo(
   );
   towerBase.position.set(268, 17, 52);
   towerBase.castShadow = true;
-  scene.add(towerBase);
+  airportGroup.add(towerBase);
 
   const towerCab = new THREE.Mesh(
     new THREE.CylinderGeometry(10, 8, 7, 12),
@@ -670,7 +672,7 @@ export function createQualityDemo(
   );
   towerCab.position.set(268, 37, 52);
   towerCab.castShadow = true;
-  scene.add(towerCab);
+  airportGroup.add(towerCab);
 
   // Hangar materials.
   const hangarMat = new THREE.MeshStandardMaterial({
@@ -688,11 +690,11 @@ export function createQualityDemo(
     hangar.position.set(330, 13, -200 + i * 90);
     hangar.castShadow = true;
     hangar.receiveShadow = true;
-    scene.add(hangar);
+    airportGroup.add(hangar);
     const door = new THREE.Mesh(new THREE.PlaneGeometry(70, 20), doorMat);
     door.rotation.y = -Math.PI / 2;
     door.position.set(282.5, 10.5, -200 + i * 90);
-    scene.add(door);
+    airportGroup.add(door);
   }
 
   // Cargo hangars on the northern cargo ramp.
@@ -709,17 +711,17 @@ export function createQualityDemo(
     cargoHangar.position.set(300, 12, z);
     cargoHangar.castShadow = true;
     cargoHangar.receiveShadow = true;
-    scene.add(cargoHangar);
+    airportGroup.add(cargoHangar);
 
     const door = new THREE.Mesh(new THREE.PlaneGeometry(58, 18), doorMat);
     door.rotation.y = -Math.PI / 2;
     door.position.set(257.9, 9.5, z);
-    scene.add(door);
+    airportGroup.add(door);
 
     // Cargo-ramp floodlight
     const cargoLight = new THREE.PointLight(0xfff0c8, 60, 180, 2);
     cargoLight.position.set(220, 20, z);
-    scene.add(cargoLight);
+    airportGroup.add(cargoLight);
     airportLights.push(cargoLight);
   });
 
@@ -806,7 +808,7 @@ export function createQualityDemo(
     // Gate beacon
     const beacon = new THREE.PointLight(0x33aaff, 10, 80, 2);
     beacon.position.set(140, 9, z);
-    scene.add(beacon);
+    airportGroup.add(beacon);
     beaconLights.push(beacon);
   });
 
@@ -820,18 +822,18 @@ export function createQualityDemo(
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 1.1, 26, 8), mastMat);
     mast.position.set(x, 13, z);
     mast.castShadow = true;
-    scene.add(mast);
+    airportGroup.add(mast);
 
     const head = new THREE.Mesh(
       new THREE.BoxGeometry(6, 1.5, 3),
       new THREE.MeshStandardMaterial({ color: 0x222831, emissive: 0xfff0c0, emissiveIntensity: 1.8 })
     );
     head.position.set(x, 26, z);
-    scene.add(head);
+    airportGroup.add(head);
 
     const light = new THREE.PointLight(0xfff2cc, 120, 340, 2);
     light.position.set(x, 26, z);
-    scene.add(light);
+    airportGroup.add(light);
     airportLights.push(light);
   });
 
@@ -841,13 +843,13 @@ export function createQualityDemo(
   accessRoad.rotation.x = -Math.PI / 2;
   accessRoad.position.set(360, 0.05, 230);
   accessRoad.receiveShadow = true;
-  scene.add(accessRoad);
+  airportGroup.add(accessRoad);
 
   const parkingLot = new THREE.Mesh(new THREE.PlaneGeometry(160, 300), roadMat);
   parkingLot.rotation.x = -Math.PI / 2;
   parkingLot.position.set(460, 0.05, 120);
   parkingLot.receiveShadow = true;
-  scene.add(parkingLot);
+  airportGroup.add(parkingLot);
 
   // Parking stall lines (instanced).
   const stallColumns = 13;
@@ -865,7 +867,7 @@ export function createQualityDemo(
     }
   }
   stalls.instanceMatrix.needsUpdate = true;
-  scene.add(stalls);
+  airportGroup.add(stalls);
 
   // A few parked cars, instanced with per-instance colour.
   const carGeometry = new THREE.BoxGeometry(1.9, 1.5, 4.4);
@@ -885,7 +887,7 @@ export function createQualityDemo(
   }
   cars.instanceMatrix.needsUpdate = true;
   if (cars.instanceColor) cars.instanceColor.needsUpdate = true;
-  scene.add(cars);
+  airportGroup.add(cars);
 
   // ===== FIRE STATION (ARFF), HELIPAD & TERMINAL DROP-OFF =====
   // Small two-bay fire station on the grass south of the apron, facing the
@@ -895,7 +897,7 @@ export function createQualityDemo(
   fireStation.position.set(140, 5, -640);
   fireStation.castShadow = true;
   fireStation.receiveShadow = true;
-  scene.add(fireStation);
+  airportGroup.add(fireStation);
 
   const fireRoof = new THREE.Mesh(
     new THREE.BoxGeometry(26, 1.1, 20),
@@ -903,7 +905,7 @@ export function createQualityDemo(
   );
   fireRoof.position.set(140, 10.55, -640);
   fireRoof.castShadow = true;
-  scene.add(fireRoof);
+  airportGroup.add(fireRoof);
 
   // Two red apparatus-bay doors on the runway-facing side.
   const fireDoorMat = new THREE.MeshStandardMaterial({
@@ -914,14 +916,14 @@ export function createQualityDemo(
   for (const z of [-636, -644]) {
     const door = new THREE.Mesh(new THREE.BoxGeometry(0.4, 6.4, 6.4), fireDoorMat);
     door.position.set(127.8, 3.2, z);
-    scene.add(door);
+    airportGroup.add(door);
   }
 
   const fireApron = new THREE.Mesh(new THREE.PlaneGeometry(34, 30), concreteMat);
   fireApron.rotation.x = -Math.PI / 2;
   fireApron.position.set(108, 0.052, -640);
   fireApron.receiveShadow = true;
-  scene.add(fireApron);
+  airportGroup.add(fireApron);
 
   // Helipad: asphalt circle with the white ring and H, on the grass south of
   // the apron.
@@ -951,7 +953,7 @@ export function createQualityDemo(
   padHCross.rotation.x = -Math.PI / 2;
   padHCross.position.y = 0.064;
   helipad.add(padHCross);
-  scene.add(helipad);
+  airportGroup.add(helipad);
 
   // Terminal drop-off lane: a curb road on the landside of the terminal,
   // looped back into the access road at both ends.
@@ -959,14 +961,14 @@ export function createQualityDemo(
   dropLane.rotation.x = -Math.PI / 2;
   dropLane.position.set(268, 0.055, 260);
   dropLane.receiveShadow = true;
-  scene.add(dropLane);
+  airportGroup.add(dropLane);
 
   for (const z of [85, 435]) {
     const link = new THREE.Mesh(new THREE.PlaneGeometry(82, 10), roadMat);
     link.rotation.x = -Math.PI / 2;
     link.position.set(319, 0.055, z);
     link.receiveShadow = true;
-    scene.add(link);
+    airportGroup.add(link);
   }
 
   // Lane edge lines and centre dashes.
@@ -975,7 +977,7 @@ export function createQualityDemo(
   for (const x of [259.5, 276.5]) {
     const edge = new THREE.Mesh(laneEdgeGeometry, lanePaintMat);
     edge.position.set(x, 0.07, 258);
-    scene.add(edge);
+    airportGroup.add(edge);
   }
   const laneDashGeometry = new THREE.BoxGeometry(0.2, 0.02, 4);
   const laneDashes = new THREE.InstancedMesh(laneDashGeometry, lanePaintMat, 29);
@@ -986,7 +988,7 @@ export function createQualityDemo(
     laneDashes.setMatrixAt(i, laneDummy.matrix);
   }
   laneDashes.instanceMatrix.needsUpdate = true;
-  scene.add(laneDashes);
+  airportGroup.add(laneDashes);
 
   // Cars waiting at the terminal curb.
   const dropCars = new THREE.InstancedMesh(carGeometry, carMaterial, 8);
@@ -1000,8 +1002,12 @@ export function createQualityDemo(
   }
   dropCars.instanceMatrix.needsUpdate = true;
   if (dropCars.instanceColor) dropCars.instanceColor.needsUpdate = true;
-  scene.add(dropCars);
+  airportGroup.add(dropCars);
 
+
+  airportGroup.add(airportGroup);
+
+  scene.add(airportGroup);
   // ===== AIRFIELD VEGETATION =====
   // Mowed grass overlay, wind-animated clumps, shrubs and wildflowers. All of
   // it is instanced and avoids every paved surface, so the runway, taxiways
@@ -1470,6 +1476,7 @@ export function createQualityDemo(
 
   const restoreProceduralWorld = () => {
     world.group.visible = true;
+    airportGroup.visible = true;
   };
 
   const deactivateRealWorld = (restoreCamera = true) => {
@@ -1485,6 +1492,7 @@ export function createQualityDemo(
     if (!realWorldRequested) return;
     if (state.status === 'ready') {
       world.group.visible = false;
+      airportGroup.visible = false;
       console.info(`[real-world] ${state.reason}`);
       return;
     }
@@ -1517,6 +1525,7 @@ export function createQualityDemo(
       // Hide the compressed procedural landscape while the tiles stream. The
       // group stays alive so turning the mode off restores it instantly.
       world.group.visible = false;
+      airportGroup.visible = false;
 
       // 1 real-mode unit = 1 metre. The tiles centre MEX at the origin, so a
       // camera at y = 2000 sits ~2 km above the airport looking down at it.
@@ -1554,7 +1563,7 @@ export function createQualityDemo(
     // so no AI aircraft spawns on top of the player or steals their jetway.
     const playerGate = aircraft ? nearestStand(aircraft.position) : null;
     trafficManager.setPlayerGate(playerGate);
-    trafficManager.update(dt, camera.position);
+    if (!realWorldRequested) trafficManager.update(dt, camera.position);
     const stands = trafficManager.getStandOccupancies();
     // Track the player's stand and advance their authorised boarding.
     if (playerGate === null && playerGround.gateId !== null) {
@@ -1625,8 +1634,8 @@ export function createQualityDemo(
     } else {
       pushbackTug.visible = false;
     }
-    scheduleManager.update(dt);
-    routeTraffic.update(dt);
+    if (!realWorldRequested) scheduleManager.update(dt);
+    if (!realWorldRequested) routeTraffic.update(dt);
     worldManager.update(camera.position);
     textureStreamer.update(camera, container.clientHeight);
 

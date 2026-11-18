@@ -132,7 +132,7 @@ export class AirNetwork {
   }
 }
 
-function runwayDir(airport: AirportDefinition): THREE.Vector3 {
+export function runwayDir(airport: AirportDefinition): THREE.Vector3 {
   const yaw = (airport.headingDeg * Math.PI) / 180;
   return new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
 }
