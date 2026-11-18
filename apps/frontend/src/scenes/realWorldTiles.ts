@@ -10,7 +10,7 @@ import {
 } from '3d-tiles-renderer/plugins';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { HOME_AIRPORT } from './airports';
-import { geoToLocal } from './geo';
+import { geoToLocal, localToGeo } from './geo';
 
 /**
  * Real-world visual layer for the prototype "MEX real" mode.
@@ -30,6 +30,12 @@ const LOAD_RADIUS_M = 10_000; // Only stream tiles around MEX on a GTX 1650.
 const ERROR_TARGET = 32; // Conservative screen-space error (pixels).
 const REGION_ERROR_TARGET_M = 25; // Metric detail cap inside the 10 km mask.
 const LOAD_TIMEOUT_MS = 45_000;
+/**
+ * How far the camera must move from the load region's centre before the
+ * region follows it. The 10 km sphere stays put for small moves and jumps
+ * in 2 km steps, so tiles are not re-evaluated every frame.
+ */
+const RECENTER_MIN_MOVE_M = 2_000;
 const DRACO_DECODER_PATH = '/draco/';
 
 type RootListener = (
@@ -85,7 +91,18 @@ function safeErrorMessage(error: unknown): string {
   return message.replace(/([?&](?:access_token|token|key)=)[^&\s]+/gi, '$1***');
 }
 
-/** Very small GPU-memory estimate used only for the console tuning log. */
+/** Pure helper: does the load region need to follow the camera this far? */
+export function shouldRecenterRegion(
+  centerX: number,
+  centerZ: number,
+  x: number,
+  z: number,
+  minMoveM = RECENTER_MIN_MOVE_M
+): boolean {
+  const dx = x - centerX;
+  const dz = z - centerZ;
+  return dx * dx + dz * dz >= minMoveM * minMoveM;
+}
 function estimateBytes(root: THREE.Object3D): number {
   const geometries = new Set<THREE.BufferGeometry>();
   const textures = new Set<THREE.Texture>();
@@ -128,6 +145,9 @@ export class RealWorldTiles {
 
   private tiles: TilesRenderer | null = null;
   private dracoLoader: DRACOLoader | null = null;
+  private region: SphereRegion | null = null;
+  /** Local (x, z) the load region's sphere is currently centred on. */
+  private readonly regionCenterLocal = new THREE.Vector2(0, 0);
   private rootListener: RootListener | null = null;
   private errorListener: LoadErrorListener | null = null;
   private loadTimeout: number | null = null;
@@ -233,7 +253,38 @@ export class RealWorldTiles {
     }
 
     tiles.update();
+    this.followCamera(camera);
     this.logProgress(tiles);
+  }
+
+  /**
+   * The load region is a 10 km sphere that used to sit fixed on MEX: flying
+   * further than that left the aircraft over the coarsest root tiles, which
+   * never refine (the mask suppresses everything outside the sphere). The
+   * region now follows the camera in 2 km steps, so detailed tiles stream
+   * wherever the player flies. The plugin re-evaluates `region.sphere` on
+   * every tile check (SphereRegion.intersectsTile reads it live), so moving
+   * the sphere is enough — the tileset is not rebuilt.
+   */
+  private followCamera(camera: THREE.Camera): void {
+    const tiles = this.tiles;
+    const region = this.region;
+    if (!tiles || !region || this.disposed) return;
+    const cx = camera.position.x;
+    const cz = camera.position.z;
+    if (!shouldRecenterRegion(this.regionCenterLocal.x, this.regionCenterLocal.y, cx, cz)) return;
+
+    const geo = localToGeo(cx, cz, MEX_ORIGIN, 1);
+    tiles.ellipsoid.getCartographicToPosition(
+      THREE.MathUtils.degToRad(geo.lat),
+      THREE.MathUtils.degToRad(geo.lon),
+      MEX_ELEVATION_M,
+      region.sphere.center
+    );
+    this.regionCenterLocal.set(cx, cz);
+    console.info(
+      `[real-world] Región de carga recentrada a (${Math.round(cx)}, ${Math.round(cz)}) m desde MEX.`
+    );
   }
 
   private startAsset(assetId: string, token: string, isFallback: boolean): void {
@@ -281,6 +332,8 @@ export class RealWorldTiles {
     });
     const loadRegion = new LoadRegionPlugin();
     loadRegion.addRegion(region);
+    this.region = region;
+    this.regionCenterLocal.set(0, 0);
 
     const dracoLoader = new DRACOLoader();
     dracoLoader.setDecoderPath(DRACO_DECODER_PATH);
@@ -422,6 +475,8 @@ export class RealWorldTiles {
     this.rootListener = null;
     this.errorListener = null;
     this.tiles = null;
+    this.region = null;
+    this.regionCenterLocal.set(0, 0);
     this.dracoLoader?.dispose();
     this.dracoLoader = null;
     this.lastSize.set(-1, -1);
