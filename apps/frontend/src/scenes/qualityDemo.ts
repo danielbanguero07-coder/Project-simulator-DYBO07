@@ -21,6 +21,7 @@ import {
   makeWindowCanvas
 } from './airportTextures';
 import { buildWorld } from './worldGenerator';
+import { buildAirportVegetation } from './airportVegetation';
 import { JetwaySystem, type JetwayStatus } from './jetwaySystem';
 import { BoardingSystem, type BoardingStatus, type BoardingActivityInput } from './boardingSystem';
 import { RouteTraffic } from './airRoutes';
@@ -996,6 +997,15 @@ export function createQualityDemo(
   if (dropCars.instanceColor) dropCars.instanceColor.needsUpdate = true;
   scene.add(dropCars);
 
+  // ===== AIRFIELD VEGETATION =====
+  // Mowed grass overlay, wind-animated clumps, shrubs and wildflowers. All of
+  // it is instanced and avoids every paved surface, so the runway, taxiways
+  // and apron keep their hard edges.
+  const airportVegetation = buildAirportVegetation(scene, {
+    premium,
+    heightAt: (x, z) => world.heightAt(x, z)
+  });
+
   // ===== A320 GLB =====
   let aircraft: THREE.Object3D | null = null;
   const loadA320 = () => {
@@ -1443,6 +1453,7 @@ export function createQualityDemo(
     timeManager.update();
     const daylight = updateEnvironment(timeManager.getHour());
     world.update(dt, daylight);
+    airportVegetation.update(dt);
 
     // Animar efectos de luces (PAPI guiado por la posición del avión)
     animateLights(dt, aircraft?.position);
@@ -1598,6 +1609,7 @@ export function createQualityDemo(
       renderer.dispose();
       renderer.domElement.remove();
       routeTraffic.dispose();
+      airportVegetation.dispose();
       world.dispose();
       worldManager.dispose();
       textureStreamer.dispose();
