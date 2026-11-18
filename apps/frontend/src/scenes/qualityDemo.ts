@@ -14,7 +14,8 @@ import { createRunwayMaterial } from './runwayMaterial';
 import { mergeTrafficMarkers, type MapAircraft } from './mapMarkers';
 import { aiFollowPose } from './cameraFollow';
 import { buildRealAirportGroundNetwork, REAL_RUNWAY_DIR } from './realGroundNetwork';
-import { buildRealAirNetwork } from './realAirNetwork';
+import { buildRealAirNetwork, HOME_ORIGIN_3D } from './realAirNetwork';
+import { mslToLocalY } from './geo';
 import { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights } from './airportLights';
 import { createHomeAirportSigns } from './airportSigns';
 import { createApronMarkings } from './apronMarkings';
@@ -1267,15 +1268,23 @@ export function createQualityDemo(
   const realAirNetwork = realModeFromUrl ? buildRealAirNetwork() : undefined;
   const realGroundSpots = realModeFromUrl
     ? (() => {
+        // Local ground Y at MEX + 2 m: the spots are 2 m above the visible
+        // ground, NOT at MSL 2232 m (using elevationRealM directly as Y
+        // was the 2026-11-18 "never touches the ground" bug).
+        const groundY =
+          mslToLocalY(
+            HOME_AIRPORT.lat,
+            HOME_AIRPORT.lon,
+            HOME_AIRPORT.elevationRealM,
+            HOME_ORIGIN_3D
+          ) + 2;
         const stands = network.gates
           .map((gate) => {
             const node = trafficManager.getNode(gate.gateNode);
             return node
               ? {
                   id: gate.gateId,
-                  position: node.position
-                    .clone()
-                    .setY(HOME_AIRPORT.elevationRealM + 2)
+                  position: node.position.clone().setY(groundY)
                 }
               : null;
           })
@@ -1291,14 +1300,14 @@ export function createQualityDemo(
               hold
                 .clone()
                 .addScaledVector(REAL_RUNWAY_DIR, slot * 55)
-                .setY(HOME_AIRPORT.elevationRealM + 2)
+                .setY(groundY)
             )
           : [];
         return {
           stands,
           queue,
           threshold: threshold
-            ? threshold.clone().setY(HOME_AIRPORT.elevationRealM + 2)
+            ? threshold.clone().setY(groundY)
             : new THREE.Vector3()
         };
       })()

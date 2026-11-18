@@ -91,10 +91,10 @@ const spawnPose = traffic.getFirstAgentPose();
 check('first agent pose exists at spawn', spawnPose !== null);
 if (spawnPose) {
   check(
-    'spawn pose is parked at real gate 1',
+    'spawn pose is parked at real gate 1 (2 m above the local ground, not MSL 2232 m)',
     Math.abs(spawnPose.position.x - -659) < 5 &&
       Math.abs(spawnPose.position.z - -95) < 5 &&
-      Math.abs(spawnPose.position.y - 2232) < 5,
+      Math.abs(spawnPose.position.y - 2) < 5,
     `(${spawnPose.position.x.toFixed(0)}, ${spawnPose.position.y.toFixed(0)}, ${spawnPose.position.z.toFixed(0)})`
   );
   check('spawn yaw is finite', Number.isFinite(spawnPose.yaw));

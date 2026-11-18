@@ -10,7 +10,10 @@
  * It checks the network geometry (real runway axis, elevations, routes),
  * then flies the whole round trip headless — MEX gate -> 05L takeoff ->
  * GDL landing -> turnaround -> MEX landing -> MEX gate — and asserts the
- * phase sequence, the touchdown elevations and the total time. The
+ * phase sequence, the touchdown heights and the total time. Altitudes
+ * are LOCAL scene Y (Y = 0 is the MEX ground, GDL ground is about
+ * -17,269 m): the 2026-11-18 fix for the "never touches the ground" bug,
+ * where MSL heights were used directly as Y. The
  * en-route legs run at the same 60x compression as the game, so the
  * round trip takes minutes of simulated time, not an hour.
  */
@@ -44,11 +47,12 @@ import {
 import {
   buildRealAirNetwork,
   realAirportView,
-  trueHeadingToSceneYaw
+  trueHeadingToSceneYaw,
+  HOME_ORIGIN_3D
 } from '../src/scenes/realAirNetwork';
 import { validateAirNetwork, buildAirNetwork } from '../src/scenes/airNetwork';
 import { RouteTraffic } from '../src/scenes/airRoutes';
-import { geoToLocal } from '../src/scenes/geo';
+import { geoToLocal, localToGeo, mslToLocalY } from '../src/scenes/geo';
 import { HOME_AIRPORT, getAirport } from '../src/scenes/airports';
 
 let failures = 0;
@@ -72,6 +76,19 @@ const network = buildRealAirNetwork();
 const report = validateAirNetwork(network);
 check('validateAirNetwork() is clean', report.ok, report.errors.join('; '));
 check('55 nodes (5 per airport + one waypoint per directed route)', report.nodeCount === 55, `${report.nodeCount}`);
+// mslToLocalY against independent WGS84 reference values: the MEX ground
+// sits at local Y = 0 and the GDL ground about 17,269 m below it (the
+// Earth curves away from the MEX tangent plane over 459 km).
+check(
+  'mslToLocalY: MEX ground (2230 m MSL) is local Y = 0',
+  Math.abs(mslToLocalY(MEX.lat, MEX.lon, 2230, HOME_ORIGIN_3D)) < 0.01,
+  `${mslToLocalY(MEX.lat, MEX.lon, 2230, HOME_ORIGIN_3D)}`
+);
+check(
+  'mslToLocalY: GDL ground (1529 m MSL) is local Y = -17,269 m',
+  Math.abs(mslToLocalY(GDL.lat, GDL.lon, 1529, HOME_ORIGIN_3D) + 17269) < 2,
+  `${mslToLocalY(GDL.lat, GDL.lon, 1529, HOME_ORIGIN_3D).toFixed(1)}`
+);
 const mexRunway = network.get('RUNWAY-MEX')!;
 const gdlRunway = network.get('RUNWAY-GDL')!;
 check(
@@ -80,7 +97,7 @@ check(
     Math.abs(mexRunway.position.z - REAL_RUNWAY_CENTER.z) < 2,
   `(${mexRunway.position.x.toFixed(1)}, ${mexRunway.position.z.toFixed(1)})`
 );
-check('MEX runway node is at the real elevation + 2 m', Math.abs(mexRunway.position.y - 2232) < 1, `${mexRunway.position.y}`);
+check('MEX runway node is 2 m above the local ground (Y = 0 at MEX)', Math.abs(mexRunway.position.y - 2) < 1, `${mexRunway.position.y}`);
 const gdlLocal = geoToLocal(GDL.lat, GDL.lon, { lat: MEX.lat, lon: MEX.lon });
 check(
   'GDL runway node is the airport reference point (approximate centre)',
@@ -88,7 +105,7 @@ check(
     Math.abs(gdlRunway.position.z - gdlLocal.z) < 2,
   `(${gdlRunway.position.x.toFixed(0)}, ${gdlRunway.position.z.toFixed(0)})`
 );
-check('GDL runway node is at the real elevation + 2 m', Math.abs(gdlRunway.position.y - 1531) < 1, `${gdlRunway.position.y}`);
+check('GDL runway node is 2 m above the local GDL ground (-17,269 m)', Math.abs(gdlRunway.position.y + 17267) < 2, `${gdlRunway.position.y}`);
 check(
   'MEX scene yaw is 120.6° (true 59.4°)',
   Math.abs(MEX_VIEW.headingDeg - 120.6) < 0.5,
@@ -130,8 +147,9 @@ const routeBack = network.findFlightRoute('GDL', 'MEX');
 check('GDL -> MEX route exists', routeBack !== null, 'null');
 const wpt = network.get('WPT-MEX-GDL')!;
 const midExpected = mexRunway.position.clone().add(gdlRunway.position).multiplyScalar(0.5);
-// Horizontal distance only: the waypoint flies 1048 m above the midpoint
-// (cruise 2930 m vs the midpoint elevation 1881 m).
+// Horizontal distance only: the waypoint flies at MSL 2930 m, whose
+// local Y at the leg midpoint is about -3,458 m (the ground there is
+// ~4.1 km below the MEX tangent plane).
 const wptOffMid = Math.hypot(
   wpt.position.x - midExpected.x,
   wpt.position.z - midExpected.z
@@ -141,7 +159,13 @@ check(
   wptOffMid < 1000,
   `${wptOffMid.toFixed(0)} m off the midpoint`
 );
-check('WPT-MEX-GDL cruise altitude is 2930 m', Math.abs(wpt.position.y - 2930) < 1, `${wpt.position.y}`);
+const wptGeo = localToGeo(wpt.position.x, wpt.position.z, { lat: MEX.lat, lon: MEX.lon });
+const wptExpectedY = mslToLocalY(wptGeo.lat, wptGeo.lon, 2930, HOME_ORIGIN_3D);
+check(
+  'WPT-MEX-GDL cruise altitude is MSL 2930 m in local Y (about -3,458 m)',
+  Math.abs(wpt.position.y - wptExpectedY) < 5 && wptExpectedY > -3600 && wptExpectedY < -3300,
+  `${wpt.position.y.toFixed(1)} (expected ${wptExpectedY.toFixed(1)})`
+);
 // Procedural regression: the same builder with the procedural catalogue
 // must produce the same waypoints as before (midpoint of the compressed
 // leg plus the 600 m lateral offset, cruise 394 m over the 95 m pad),
@@ -165,12 +189,14 @@ const shared = new SharedAirport();
 const sequencer = new RunwaySequencer(shared.runway);
 const tm = new TrafficManager(scene, shared, sequencer);
 const realNet = buildRealAirportGroundNetwork(tm);
-// Same spots qualityDemo.ts reads from the active ground network.
+// Same spots qualityDemo.ts reads from the active ground network: local
+// ground Y at MEX + 2 m (NOT MSL 2232 m — that was the bug).
+const mexGroundY = mslToLocalY(MEX.lat, MEX.lon, MEX.elevationRealM, HOME_ORIGIN_3D);
 const stands = realNet.gates
   .map((gate) => {
     const node = tm.getNode(gate.gateNode);
     return node
-      ? { id: gate.gateId, position: node.position.clone().setY(MEX.elevationRealM + 2) }
+      ? { id: gate.gateId, position: node.position.clone().setY(mexGroundY + 2) }
       : null;
   })
   .filter((s): s is { id: number; position: THREE.Vector3 } => s !== null);
@@ -179,9 +205,9 @@ const threshold = tm.getNode(realNet.runwayThreshold)!.position;
 const realGround = {
   stands,
   queue: [0, 1, 2].map((slot) =>
-    hold.clone().addScaledVector(REAL_RUNWAY_DIR, slot * 55).setY(MEX.elevationRealM + 2)
+    hold.clone().addScaledVector(REAL_RUNWAY_DIR, slot * 55).setY(mexGroundY + 2)
   ),
-  threshold: threshold.clone().setY(MEX.elevationRealM + 2)
+  threshold: threshold.clone().setY(mexGroundY + 2)
 };
 const traffic = new RouteTraffic(scene, {
   premium: false,
@@ -235,18 +261,18 @@ check(
   phases.join(',')
 );
 check(
-  'touchdown at GDL is at the real elevation + 2 m (1531)',
-  touchdownGdl !== null && Math.abs(touchdownGdl - 1531) < 5,
+  'touchdown at GDL is 2 m above the local GDL ground (-17,267 m)',
+  touchdownGdl !== null && Math.abs(touchdownGdl + 17267) < 5,
   `${touchdownGdl ?? 'never landed'}`
 );
 check(
-  'touchdown at MEX is at the real elevation + 2 m (2232)',
-  touchdownMex !== null && Math.abs(touchdownMex - 2232) < 5,
+  'touchdown at MEX is 2 m above the local ground (+2 m)',
+  touchdownMex !== null && Math.abs(touchdownMex - 2) < 5,
   `${touchdownMex ?? 'never landed'}`
 );
 check(
-  'cruise reaches the en-route altitude (~2930 m)',
-  maxAlt > 2800 && maxAlt < 3100,
+  'cruise stays near the MEX approach altitude (max local Y ~280 m)',
+  maxAlt > 200 && maxAlt < 400,
   `${maxAlt} m`
 );
 check(

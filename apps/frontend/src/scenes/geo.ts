@@ -103,6 +103,62 @@ export function localToGeo(
   return { lat, lon };
 }
 
+// WGS84 ellipsoid (the model the 3D Tiles renderer uses for the Google
+// tiles), for converting MSL heights to local scene Y.
+const WGS84_A = 6378137;
+const WGS84_F = 1 / 298.257223563;
+const WGS84_E2 = WGS84_F * (2 - WGS84_F);
+
+/** A geodetic origin with its height above sea level, in metres. */
+export interface GeoOrigin3D {
+  lat: number;
+  lon: number;
+  /** Height of the origin point above sea level, in metres. */
+  mslM: number;
+}
+
+/** Geodetic (lat, lon, height) -> ECEF metres on the WGS84 ellipsoid. */
+function ecefWgs84(lat: number, lon: number, h: number): [number, number, number] {
+  const phi = lat * DEG_TO_RAD;
+  const lambda = lon * DEG_TO_RAD;
+  const sinPhi = Math.sin(phi);
+  const n = WGS84_A / Math.sqrt(1 - WGS84_E2 * sinPhi * sinPhi);
+  return [
+    (n + h) * Math.cos(phi) * Math.cos(lambda),
+    (n * (1 - WGS84_E2) + h) * sinPhi,
+    (n + h) * Math.cos(phi) * Math.sin(lambda)
+  ];
+}
+
+/**
+ * Local scene Y for a point at (lat, lon) and `mslM` metres above sea
+ * level, measured from an origin point that sits at local Y = 0.
+ *
+ * The scene's Y = 0 is the ground at the origin (the Google tiles are
+ * recentred there: ReorientationPlugin with height = origin MSL), so
+ * this is NOT the MSL height itself: the Earth curves away from the
+ * origin's tangent plane, about 17.3 km down at 459 km (GDL). Using MSL
+ * as Y directly put the AI plane 2.2 km above the ground at MEX and
+ * ~19 km above it at GDL (the 2026-11-18 "never touches the ground"
+ * bug: the states changed, the plane never landed).
+ */
+export function mslToLocalY(
+  lat: number,
+  lon: number,
+  mslM: number,
+  origin: GeoOrigin3D
+): number {
+  const [ox, oy, oz] = ecefWgs84(origin.lat, origin.lon, origin.mslM);
+  const [px, py, pz] = ecefWgs84(lat, lon, mslM);
+  // Geodetic up at the origin (unit normal to the ellipsoid).
+  const phi0 = origin.lat * DEG_TO_RAD;
+  const lambda0 = origin.lon * DEG_TO_RAD;
+  const ux = Math.cos(phi0) * Math.cos(lambda0);
+  const uy = Math.sin(phi0);
+  const uz = Math.cos(phi0) * Math.sin(lambda0);
+  return (px - ox) * ux + (py - oy) * uy + (pz - oz) * uz;
+}
+
 /** Return human-readable problems found in an airport's real-world data. */
 export function validateAirportGeo(airport: AirportGeo): string[] {
   const errors: string[] = [];
