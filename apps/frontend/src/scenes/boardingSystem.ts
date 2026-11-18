@@ -52,8 +52,6 @@ export interface BoardingActivityInput {
 const PASSENGERS_PER_GATE = 8;
 /** How many times a single silhouette walks the walkway while boarding. */
 const WALK_CYCLES = 3;
-/** Metres the walkway covers along the terminal facade. */
-const WALK_LENGTH = 12.5;
 
 interface Walker {
   gateId: number;

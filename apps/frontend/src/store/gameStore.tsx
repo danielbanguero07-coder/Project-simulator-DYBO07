@@ -43,7 +43,7 @@ interface GameState {
   placeBuilding: (x: number, y: number, templateId: string) => void;
 }
 
-const API_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:3000';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const DEFAULT_WORLD_ID = 'world-main';
 
 type ResourceInput =
@@ -167,8 +167,8 @@ export const useGame = create<GameState>()(
             }),
           },
         }));
-      } catch (error: any) {
-        console.warn('Could not load initial game state:', error?.message);
+      } catch (error) {
+        console.warn('Could not load initial game state:', error instanceof Error ? error.message : String(error));
       }
     },
 
@@ -196,11 +196,12 @@ export const useGame = create<GameState>()(
 
         get().connect();
         void get().loadGameState();
-      } catch (error: any) {
-        const message =
-          error?.response?.data?.error?.message ||
-          error?.response?.data?.message ||
-          'No se pudo iniciar sesión';
+      } catch (error) {
+        const message = axios.isAxiosError(error)
+          ? (error.response?.data?.error?.message ||
+            error.response?.data?.message ||
+            'No se pudo iniciar sesión')
+          : 'No se pudo iniciar sesión';
         set({ error: message });
         throw new Error(message);
       } finally {
@@ -252,6 +253,6 @@ export function GameProvider({ children }: { children: ReactNode }) {
 }
 
 // Dev-only hook so the state can be inspected from the browser console.
-if ((import.meta as any).env?.DEV) {
-  (window as any).__gameStore = useGame;
+if (import.meta.env.DEV) {
+  (window as unknown as { __gameStore?: typeof useGame }).__gameStore = useGame;
 }

@@ -68,7 +68,7 @@ export function NavigationMap({ state, isRealWorld, getTrafficMarkers, onSelectA
       home: homePoint,
       headingDeg: trueHeadingFromYaw(state.rotation.y)
     };
-  }, [state.position.x, state.position.z, state.rotation.y, projection, home]);
+  }, [state.position.x, state.position.z, state.rotation.y, projection, home, isRealWorld]);
 
   const nearest = React.useMemo(() => {
     let best = { code: home.code, distance: Infinity };

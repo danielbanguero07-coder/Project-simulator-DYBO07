@@ -37,7 +37,7 @@ export interface GroundNetwork {
   runwayEnd: number;
   /** Hold-short point where departures queue before entering the runway. */
   departureHold: number;
-  layout: typeof AIRPORT_LAYOUT;
+  layout?: typeof AIRPORT_LAYOUT;
 }
 
 export const AIRPORT_LAYOUT = {

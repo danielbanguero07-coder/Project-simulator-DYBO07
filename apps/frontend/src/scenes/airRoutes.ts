@@ -3,7 +3,6 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import {
   createProceduralAircraft,
   getFleetSpec,
-  pickFleetType,
   pickLivery,
   type FleetSpec
 } from './fleet';

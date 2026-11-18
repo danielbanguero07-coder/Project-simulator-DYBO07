@@ -180,6 +180,6 @@ export function buildRealAirportGroundNetwork(tm: TrafficManager): GroundNetwork
     runwayThreshold,
     runwayEnd,
     departureHold,
-    layout: null as any
+    layout: undefined
   };
 }

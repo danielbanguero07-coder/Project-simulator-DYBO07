@@ -829,8 +829,6 @@ export function buildWorld(
   const disposables: Array<THREE.BufferGeometry | THREE.Material | THREE.Texture> = [];
   scene.add(group);
 
-  const rng = mulberry32(0xc0ffee);
-
   /* ------------------------------ terrain ------------------------------ */
   const segments = premium ? 200 : 140;
   const terrainGeometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, segments, segments);

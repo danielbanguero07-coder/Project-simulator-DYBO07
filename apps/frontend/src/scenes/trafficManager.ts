@@ -834,7 +834,7 @@ export class TrafficManager {
 
   /* ------------------------------- update ------------------------------ */
 
-  update(dt: number, _aircraftPosition: THREE.Vector3) {
+  update(dt: number) {
     this.elapsed += dt;
     this.updateAircraft(dt);
     this.updateVehicles(dt);

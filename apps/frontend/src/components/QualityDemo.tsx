@@ -5,7 +5,7 @@ import {
   type QualityDemoHandle,
   type QualityTier,
 } from '@/scenes/qualityDemo';
-import type { TextureQualityCap } from '@/scenes/textureStreaming';
+import type { TextureQualityCap, StreamedAssetInfo } from '@/scenes/textureStreaming';
 
 interface QualityDemoProps {
   tier: QualityTier;
@@ -216,7 +216,7 @@ export function QualityDemo({ tier }: QualityDemoProps) {
           </div>
 
           <div className="mt-2.5 space-y-1">
-            {stats.stream.assets.map((asset: any) => (
+            {stats.stream.assets.map((asset: StreamedAssetInfo) => (
               <div key={asset.id} className="flex items-center justify-between gap-2">
                 <span className="truncate text-slate-400">{asset.label}</span>
                 <span className="flex shrink-0 items-center gap-1">

@@ -93,8 +93,6 @@ export function updateLighting(hour: number) {
 let cachedPapi: THREE.Group | null = null;
 let cachedPapiLamps: THREE.Mesh[] = [];
 let cachedPapiAngles: number[] = [];
-let cachedPapiX = 0;
-let cachedPapiZ = 0;
 
 const white = new THREE.Color(0xf7f7f2);
 const red = new THREE.Color(0xff2222);
@@ -106,8 +104,6 @@ export function setPapiGroup(group: THREE.Group) {
     (child) => child.userData?.isPapiLight
   ) as THREE.Mesh[];
   cachedPapiAngles = (group.userData?.unitAngles as number[]) ?? [2.5, 2.83, 3.17, 3.5];
-  cachedPapiX = (group.userData?.papiX as number) ?? group.position.x;
-  cachedPapiZ = (group.userData?.papiZ as number) ?? group.position.z;
 }
 
 export function findPapiGroup(): THREE.Group | null {

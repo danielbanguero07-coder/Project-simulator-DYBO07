@@ -73,7 +73,7 @@ function drawCityGrid(
   context: CanvasRenderingContext2D,
   projection: MapProjection
 ): void {
-  const { width, height, pxPerMetre } = projection;
+  const { width, height } = projection;
   const topLeft = projection.toWorld(0, 0);
   const bottomRight = projection.toWorld(width, height);
   const min = -6000;

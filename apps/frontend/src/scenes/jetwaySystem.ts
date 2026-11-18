@@ -35,8 +35,6 @@ const CAB_Y = 5.05;
 const CAB_DEPTH = 4.8;
 const STOWED_REACH = 13;
 const MAX_REACH = 44;
-/** Seconds the bridge needs to swing fully in or out (~2.5 s). */
-const DOCK_SECONDS = 2.5;
 
 export interface JetwayAircraftTarget {
   position: THREE.Vector3;

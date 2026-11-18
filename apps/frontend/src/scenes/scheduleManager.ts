@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { Flight, FlightStatus, createFlight } from './flight';
 import { TimeManager } from './timeSystem';
 import { TrafficManager } from './trafficManager';

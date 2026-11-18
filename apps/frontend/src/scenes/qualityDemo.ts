@@ -6,8 +6,9 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { TextureStreamer, type TextureQualityCap } from './textureStreaming';
+import type { TextureStreamStats } from './textureStreaming';
 import { WorldManager } from './worldManager';
-import { TrafficManager, type PathNode } from './trafficManager';
+import { TrafficManager } from './trafficManager';
 import { buildAirportGroundNetwork, validateGroundNetwork, AIRPORT_LAYOUT } from './groundNetwork';
 import { createRunwayMaterial } from './runwayMaterial';
 import { mergeTrafficMarkers, type MapAircraft } from './mapMarkers';
@@ -44,7 +45,7 @@ export interface DemoStats {
   gpu?: string;
   integratedGpu?: boolean;
   renderScale?: number;
-  stream?: any;
+  stream?: TextureStreamStats;
   /** Per-gate passenger boarding progress while an aircraft is at the stand. */
   boarding?: BoardingStatus[];
   /** Live runway occupancy, as the simulated tower would see it. */
@@ -1691,7 +1692,7 @@ export function createQualityDemo(
     // at load (?world=real). If the tiles were toggled on mid-session, the
     // graph is still the procedural one, so traffic stays frozen on it, as
     // before, instead of driving over the real city.
-    if (!realWorldRequested || realModeFromUrl) trafficManager.update(dt, camera.position);
+    if (!realWorldRequested || realModeFromUrl) trafficManager.update(dt);
     const stands = trafficManager.getStandOccupancies();
     // Track the player's stand and advance their authorised boarding.
     if (playerGate === null && playerGround.gateId !== null) {
