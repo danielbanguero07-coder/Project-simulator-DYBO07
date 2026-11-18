@@ -34,6 +34,9 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     triangles: 0,
   });
   
+  // Intencional: physicsRef se crea con su valor inicial en este mismo
+  // componente y se lee una sola vez al montar para sembrar el estado.
+  // eslint-disable-next-line react-hooks/refs
   const [flightState, setFlightState] = useState<FlightState>(physicsRef.current.state);
   const [uiVisible] = useState(true);
   const [measuring, setMeasuring] = useState(false);
@@ -486,6 +489,9 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
       </div>
 
       {/* Radial aircraft menu (V opens/closes, Esc closes) */}
+      {/* Intencional: el IIFE solo arma el menu radial; las lecturas de
+          physicsRef ocurren dentro de los onClick (run), no durante el render. */}
+      {/* eslint-disable-next-line react-hooks/refs */}
       {showRadial && (() => {
         const actions: Array<{
           icon: string;

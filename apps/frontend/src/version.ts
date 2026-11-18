@@ -5,4 +5,4 @@
  * the number tells whether the latest pull loaded. The number is manual on
  * purpose: it is only a build marker, not a release scheme.
  */
-export const APP_VERSION = '0.4.7';
+export const APP_VERSION = '0.4.8';
