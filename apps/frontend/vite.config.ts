@@ -19,7 +19,8 @@ export default defineConfig({
     watch: {
       // Large binary assets in public/ can be locked by Windows/antivirus and
       // crash the file watcher with EBUSY. They are served as static files.
-      ignored: ['**/public/models/**'],
+      // The Draco decoder files are copied from three and are also static.
+      ignored: ['**/public/models/**', '**/public/draco/**'],
     },
     proxy: {
       '/api': {

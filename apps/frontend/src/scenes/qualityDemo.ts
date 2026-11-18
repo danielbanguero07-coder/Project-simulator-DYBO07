@@ -28,6 +28,7 @@ import { RouteTraffic } from './airRoutes';
 import { SharedAirport } from './runwayControl';
 import { RunwaySequencer } from './runwaySequencer';
 import { ALL_AIRPORTS, HOME_AIRPORT, ROUTES } from './airports';
+import type { RealWorldState, RealWorldTiles } from './realWorldTiles';
 
 export type QualityTier = 2 | 3;
 
@@ -97,6 +98,10 @@ export interface QualityDemoHandle {
   setPlayerFueling: (active: boolean) => void;
   /** Shows/hides the pushback tug at the player's nose gear. */
   setPlayerPushback: (active: boolean) => void;
+  /** Switches the visual world between procedural (default) and real MEX tiles. */
+  setRealWorldMode: (enabled: boolean) => void;
+  /** True while the real-world layer is requested/active. */
+  isRealWorldMode: () => boolean;
 }
 
 type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
@@ -1232,6 +1237,7 @@ export function createQualityDemo(
       routeTraffic: RouteTraffic;
       runwaySequencer: RunwaySequencer;
       world: ReturnType<typeof buildWorld>;
+      scene: THREE.Scene;
       airports: typeof ALL_AIRPORTS;
       homeAirport: typeof HOME_AIRPORT;
       routes: typeof ROUTES;
@@ -1241,6 +1247,7 @@ export function createQualityDemo(
       textureStreamer: TextureStreamer;
       renderer: THREE.WebGLRenderer;
       THREE: typeof THREE;
+      realWorld: RealWorldTiles | null;
       setCameraMode?: (mode: CameraMode) => void;
       focusAirport?: (x: number, z: number, elevation: number) => void;
       setTime?: (hour: number) => void;
@@ -1253,6 +1260,7 @@ export function createQualityDemo(
     routeTraffic,
     runwaySequencer,
     world,
+    scene,
     airports: ALL_AIRPORTS,
     homeAirport: HOME_AIRPORT,
     routes: ROUTES,
@@ -1262,6 +1270,7 @@ export function createQualityDemo(
     textureStreamer,
     renderer,
     THREE,
+    realWorld: null as RealWorldTiles | null,
     setTime: (hour: number) => timeManager.setHour(hour),
     getTime: () => timeManager.getHour()
   };
@@ -1445,6 +1454,88 @@ export function createQualityDemo(
   const clock = new THREE.Clock();
   let disposed = false;
 
+  // ===== REAL-WORLD LAYER (beta, visual only) =====
+  // `?world=real` swaps the procedural terrain for Cesium ion tiles. Physics,
+  // traffic, airports and coordinates keep running unchanged underneath; only
+  // the visual layer changes and the procedural group is hidden, not destroyed.
+  let realWorldRequested = false;
+  let realWorld: RealWorldTiles | null = null;
+  let realWorldModule: Promise<typeof import('./realWorldTiles')> | null = null;
+  let cameraModeBeforeRealWorld: CameraMode = 'AIRCRAFT_FOLLOW';
+
+  const loadRealWorldModule = () => {
+    realWorldModule ??= import('./realWorldTiles');
+    return realWorldModule;
+  };
+
+  const restoreProceduralWorld = () => {
+    world.group.visible = true;
+  };
+
+  const deactivateRealWorld = (restoreCamera = true) => {
+    realWorldRequested = false;
+    realWorld?.disable();
+    const simGlobal2 = (window as unknown as { __sim?: { realWorld?: RealWorldTiles | null } }).__sim;
+    if (simGlobal2) simGlobal2.realWorld = null;
+    restoreProceduralWorld();
+    if (restoreCamera) applyCameraMode(cameraModeBeforeRealWorld);
+  };
+
+  const onRealWorldStatus = (state: RealWorldState) => {
+    if (!realWorldRequested) return;
+    if (state.status === 'ready') {
+      world.group.visible = false;
+      console.info(`[real-world] ${state.reason}`);
+      return;
+    }
+    if (state.status === 'error' || state.status === 'unavailable') {
+      console.warn(`[real-world] ${state.reason} Se mantiene el mundo procedural.`);
+      deactivateRealWorld(false);
+    }
+  };
+
+  const activateRealWorld = async () => {
+    if (realWorldRequested || disposed) return;
+    realWorldRequested = true;
+
+    try {
+      const { RealWorldTiles } = await loadRealWorldModule();
+      if (!realWorldRequested || disposed) return;
+
+      if (!realWorld) {
+        realWorld = new RealWorldTiles(scene, { onStatusChange: onRealWorldStatus });
+      }
+      const simGlobal2 = (window as unknown as { __sim?: { realWorld?: RealWorldTiles | null } }).__sim;
+      if (simGlobal2) simGlobal2.realWorld = realWorld;
+
+      const state = realWorld.enable();
+      if (state.status === 'unavailable' || state.status === 'error') {
+        deactivateRealWorld(false);
+        return;
+      }
+
+      // Hide the compressed procedural landscape while the tiles stream. The
+      // group stays alive so turning the mode off restores it instantly.
+      world.group.visible = false;
+
+      // 1 real-mode unit = 1 metre. The tiles centre MEX at the origin, so a
+      // camera at y = 2000 sits ~2 km above the airport looking down at it.
+      cameraModeBeforeRealWorld = cameraMode;
+      applyCameraMode('FREE_ORBIT');
+      camera.position.set(2600, 2000, 4200);
+      controls.target.set(0, 0, 0);
+      controls.update();
+
+      console.info(
+        `[real-world] Modo mundo real solicitado (asset ${state.assetId ?? '...'}). ` +
+          '1 unidad = 1 metro real; el mundo procedural queda oculto.'
+      );
+    } catch (error) {
+      console.warn('[real-world] No se pudo cargar el módulo del mundo real.', error);
+      deactivateRealWorld(false);
+    }
+  };
+
   function animate() {
     if (disposed) return;
     requestAnimationFrame(animate);
@@ -1544,6 +1635,13 @@ export function createQualityDemo(
     // let it run in free-orbit mode or it will fight the scripted cameras.
     if (controls.enabled) controls.update();
 
+    if (realWorld) {
+      // TilesRenderer selects tiles from the camera's world matrix, which the
+      // scripted cameras update lazily via lookAt().
+      camera.updateMatrixWorld();
+      realWorld.update(camera, renderer);
+    }
+
     statsAccumulator.frames++;
     statsAccumulator.time += dt;
     if (statsAccumulator.time >= 1) {
@@ -1584,6 +1682,12 @@ export function createQualityDemo(
 
   animate();
 
+  // Beta opt-in: `?world=real` loads the Cesium ion tiles on top of the same
+  // simulation. Without the query flag the default procedural world runs.
+  if (new URLSearchParams(window.location.search).get('world') === 'real') {
+    void activateRealWorld();
+  }
+
   const disposeObject = (obj: THREE.Object3D) => {
     obj.traverse((child) => {
       const mesh = child as THREE.Mesh;
@@ -1597,6 +1701,9 @@ export function createQualityDemo(
   return {
     dispose: () => {
       disposed = true;
+      realWorldRequested = false;
+      realWorld?.dispose();
+      realWorld = null;
       resizeObserver.disconnect();
       if (aircraft) disposeObject(aircraft);
       pushbackTug.removeFromParent();
@@ -1639,6 +1746,11 @@ export function createQualityDemo(
     toggleGroundService,
     getPlayerGate,
     setPlayerFueling,
-    setPlayerPushback
+    setPlayerPushback,
+    setRealWorldMode: (enabled: boolean) => {
+      if (enabled) void activateRealWorld();
+      else deactivateRealWorld();
+    },
+    isRealWorldMode: () => realWorldRequested
   };
 }

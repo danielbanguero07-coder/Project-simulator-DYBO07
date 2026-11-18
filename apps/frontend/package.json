@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.51.0",
+    "3d-tiles-renderer": "0.5.4",
     "axios": "^1.7.0",
     "pixi.js": "^8.12.5",
     "react": "^18.3.1",
