@@ -788,17 +788,21 @@ export function createQualityDemo(
 
   /**
    * Nearest passenger stand to a position (within 30 m), regardless of
-   * heading. The jetway uses a stricter alignment test to dock, but ground
+   * heading. It reads the stands of the active ground network, so in real
+   * mode it measures against the real MEX gates, not the procedural ones.
+   * The jetway uses a stricter alignment test to dock, but ground
    * services should be available anywhere on the stand.
    */
   const nearestStand = (position: THREE.Vector3): number | null => {
     let bestGate: number | null = null;
     let bestDistance = 30;
-    AIRPORT_LAYOUT.gateZ.forEach((z, index) => {
-      const distance = Math.hypot(position.x - 130, position.z - z);
+    network.gates.forEach((gate) => {
+      const stand = trafficManager.getNode(gate.gateNode);
+      if (!stand) return;
+      const distance = Math.hypot(position.x - stand.position.x, position.z - stand.position.z);
       if (distance <= bestDistance) {
         bestDistance = distance;
-        bestGate = index + 1;
+        bestGate = gate.gateId;
       }
     });
     return bestGate;
@@ -1110,8 +1114,18 @@ export function createQualityDemo(
 
   // ===== GROUND TRAFFIC NETWORK =====
   // Full aircraft + vehicle graph (see groundNetwork.ts for the layout).
-  let network = buildAirportGroundNetwork(trafficManager);
-  let realNetwork: ReturnType<typeof buildRealAirportGroundNetwork> | null = null;
+  // TrafficManager picks gates and service spots by scanning its whole
+  // node graph, so the procedural and the real network must never coexist
+  // in it: exactly one is built, chosen at load time from the URL.
+  // `?world=real` builds the real MEX network (runway 05L/23R, real
+  // taxiway and gates); without it the procedural network runs as before.
+  // The in-app real-world toggle only switches the visuals, never the
+  // graph, because the graph is already populated when it runs.
+  const realModeFromUrl =
+    new URLSearchParams(window.location.search).get('world') === 'real';
+  const network = realModeFromUrl
+    ? buildRealAirportGroundNetwork(trafficManager)
+    : buildAirportGroundNetwork(trafficManager);
 
   // Service roads (vehicles only) so the AI paths are visible in the scene.
   const serviceRoadMat = new THREE.MeshStandardMaterial({
@@ -1137,20 +1151,24 @@ export function createQualityDemo(
   depotRoad.receiveShadow = true;
   airportGroup.add(depotRoad);
 
-  // Gate lead-in lines (yellow)
+  // Gate lead-in lines (yellow). Procedural scenery only: the geometry is
+  // computed from the procedural layout constants, and the lines are hidden
+  // with the rest of the procedural airport in real mode anyway.
   const standPaint = new THREE.MeshStandardMaterial({ color: 0xe0b21c, roughness: 0.6 });
-  network.gates.forEach((gate) => {
-    const stand = trafficManager.getNode(gate.gateNode);
-    if (!stand) return;
-    const fromX = AIRPORT_LAYOUT.taxilaneX;
-    const line = new THREE.Mesh(
-      new THREE.PlaneGeometry(stand.position.x - fromX + 2, 0.8),
-      standPaint
-    );
-    line.rotation.x = -Math.PI / 2;
-    line.position.set((fromX + stand.position.x) / 2, 0.1, stand.position.z);
-    airportGroup.add(line);
-  });
+  if (!realModeFromUrl) {
+    network.gates.forEach((gate) => {
+      const stand = trafficManager.getNode(gate.gateNode);
+      if (!stand) return;
+      const fromX = AIRPORT_LAYOUT.taxilaneX;
+      const line = new THREE.Mesh(
+        new THREE.PlaneGeometry(stand.position.x - fromX + 2, 0.8),
+        standPaint
+      );
+      line.rotation.x = -Math.PI / 2;
+      line.position.set((fromX + stand.position.x) / 2, 0.1, stand.position.z);
+      airportGroup.add(line);
+    });
+  }
 
   // Apron markings: stand numbers, stop bars and platform edges.
   airportGroup.add(createApronMarkings());
@@ -1229,7 +1247,7 @@ export function createQualityDemo(
   const networkReport = validateGroundNetwork(trafficManager, network);
   if (networkReport.ok) {
     console.info(
-      `[ground-network] OK · ${networkReport.aircraftNodes} aircraft nodes, ` +
+      `[ground-network] ${realModeFromUrl ? 'real MEX' : 'procedural'} OK · ${networkReport.aircraftNodes} aircraft nodes, ` +
       `${networkReport.vehicleNodes} vehicle nodes, ${networkReport.links} edges`
     );
   } else {
@@ -1314,10 +1332,19 @@ export function createQualityDemo(
 
   /** Debug helper: frame one terminal stand and its boarding bridge. */
   const focusGate = (gateId: number) => {
-    const z = AIRPORT_LAYOUT.gateZ[gateId - 1] ?? AIRPORT_LAYOUT.gateZ[0];
     applyCameraMode('FREE_ORBIT');
-    controls.target.set(166, 4, z + 6);
-    camera.position.set(152, 16, z + 44);
+    if (realModeFromUrl) {
+      const gate = network.gates.find((g) => g.gateId === gateId);
+      const stand = gate ? trafficManager.getNode(gate.gateNode) : undefined;
+      const x = stand?.position.x ?? 0;
+      const z = stand?.position.z ?? 0;
+      controls.target.set(x, 4, z + 6);
+      camera.position.set(x - 14, 16, z + 44);
+    } else {
+      const z = AIRPORT_LAYOUT.gateZ[gateId - 1] ?? AIRPORT_LAYOUT.gateZ[0];
+      controls.target.set(166, 4, z + 6);
+      camera.position.set(152, 16, z + 44);
+    }
     controls.update();
   };
 
@@ -1463,9 +1490,12 @@ export function createQualityDemo(
   let disposed = false;
 
   // ===== REAL-WORLD LAYER (beta, visual only) =====
-  // `?world=real` swaps the procedural terrain for Cesium ion tiles. Physics,
-  // traffic, airports and coordinates keep running unchanged underneath; only
-  // the visual layer changes and the procedural group is hidden, not destroyed.
+  // `?world=real` swaps the procedural terrain for Cesium ion tiles. The
+  // ground network is chosen at load time from the same flag (see the
+  // network build above): in real mode the AI ground traffic already runs
+  // on the real MEX runway and gates. Physics, airports and coordinates
+  // keep running unchanged underneath; only the visual layer changes and
+  // the procedural group is hidden, not destroyed.
   let realWorldRequested = false;
   let realWorld: RealWorldTiles | null = null;
   let realWorldModule: Promise<typeof import('./realWorldTiles')> | null = null;
@@ -1518,14 +1548,6 @@ export function createQualityDemo(
       const simGlobal2 = (window as unknown as { __sim?: { realWorld?: RealWorldTiles | null } }).__sim;
       if (simGlobal2) simGlobal2.realWorld = realWorld;
 
-      // Build (once) and cache the real MEX ground network so AI traffic can
-      // use the real runway/taxiway/gates in real mode. TrafficManager keeps
-      // its procedural nodes; real nodes are appended and addressed through
-      // realNetwork. (Full traffic re-anchoring is wired in the next step.)
-      if (!realNetwork) {
-        realNetwork = buildRealAirportGroundNetwork(trafficManager);
-      }
-
       const state = realWorld.enable();
       if (state.status === 'unavailable' || state.status === 'error') {
         deactivateRealWorld(false);
@@ -1573,7 +1595,11 @@ export function createQualityDemo(
     // so no AI aircraft spawns on top of the player or steals their jetway.
     const playerGate = aircraft ? nearestStand(aircraft.position) : null;
     trafficManager.setPlayerGate(playerGate);
-    if (!realWorldRequested) trafficManager.update(dt, camera.position);
+    // Ground traffic runs in real mode only when the real network was built
+    // at load (?world=real). If the tiles were toggled on mid-session, the
+    // graph is still the procedural one, so traffic stays frozen on it, as
+    // before, instead of driving over the real city.
+    if (!realWorldRequested || realModeFromUrl) trafficManager.update(dt, camera.position);
     const stands = trafficManager.getStandOccupancies();
     // Track the player's stand and advance their authorised boarding.
     if (playerGate === null && playerGround.gateId !== null) {
@@ -1644,6 +1670,10 @@ export function createQualityDemo(
     } else {
       pushbackTug.visible = false;
     }
+    // The schedule and the en-route traffic stay frozen in real mode: they
+    // fly the procedural air network (airNetwork.ts), whose MEX final and
+    // runway are still the north-south procedural ones. Re-anchoring them
+    // to the real 05L/23R needs real air nodes, which is a later phase.
     if (!realWorldRequested) scheduleManager.update(dt);
     if (!realWorldRequested) routeTraffic.update(dt);
     worldManager.update(camera.position);
@@ -1703,7 +1733,7 @@ export function createQualityDemo(
 
   // Beta opt-in: `?world=real` loads the Cesium ion tiles on top of the same
   // simulation. Without the query flag the default procedural world runs.
-  if (new URLSearchParams(window.location.search).get('world') === 'real') {
+  if (realModeFromUrl) {
     void activateRealWorld();
   }
 
