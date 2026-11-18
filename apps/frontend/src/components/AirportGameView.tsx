@@ -35,6 +35,12 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   
   const [flightState, setFlightState] = useState<FlightState>(physicsRef.current.state);
   const [uiVisible] = useState(true);
+  const [measuring, setMeasuring] = useState(false);
+  const [measureProgress, setMeasureProgress] = useState(0);
+  const [measureResult, setMeasureResult] = useState<{ avgFps: number; minFps: number; avgVram: number; maxVram: number } | null>(null);
+  const measureSamplesRef = useRef<{ fps: number; vram: number }[]>([]);
+  const measureIntervalRef = useRef<number | null>(null);
+  const latestStatsRef = useRef<DemoStats>({ fps: 0, drawCalls: 0, triangles: 0 });
   const [gameTime, setGameTime] = useState('--:-- GMT');
   const [boarding, setBoarding] = useState<BoardingStatus[]>([]);
   const [tower, setTower] = useState<DemoStats['runway']>(undefined);
@@ -229,6 +235,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
 
     const handle = initQualityDemo(container, 3, (newStats: DemoStats) => {
       setStats(newStats);
+      latestStatsRef.current = newStats;
       if (newStats.boarding) setBoarding(newStats.boarding);
       if (newStats.runway) setTower(newStats.runway);
       if (newStats.ground) setGround(newStats.ground);
@@ -319,6 +326,52 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     : tower.holderUse === 'arrival'
       ? 'ATERRIZAJE'
       : 'DESPEGUE';
+
+  const startMeasurement = useCallback(() => {
+    if (measuring) return;
+    setMeasuring(true);
+    setMeasureProgress(0);
+    setMeasureResult(null);
+    measureSamplesRef.current = [];
+    let ticks = 0;
+    measureIntervalRef.current = window.setInterval(() => {
+      const s = latestStatsRef.current;
+      const vram = s?.stream ? s.stream.residentBytes / (1024 * 1024) : 0;
+      measureSamplesRef.current.push({ fps: s?.fps ?? 0, vram });
+      ticks += 1;
+      setMeasureProgress(ticks);
+      if (ticks >= 30) {
+        if (measureIntervalRef.current !== null) {
+          window.clearInterval(measureIntervalRef.current);
+          measureIntervalRef.current = null;
+        }
+        const samples = measureSamplesRef.current;
+        const fpsVals = samples.map((x) => x.fps).filter((v) => v > 0);
+        const vramVals = samples.map((x) => x.vram);
+        const avgFps = fpsVals.length ? fpsVals.reduce((a, b) => a + b, 0) / fpsVals.length : 0;
+        const minFps = fpsVals.length ? Math.min(...fpsVals) : 0;
+        const avgVram = vramVals.length ? vramVals.reduce((a, b) => a + b, 0) / vramVals.length : 0;
+        const maxVram = vramVals.length ? Math.max(...vramVals) : 0;
+        setMeasureResult({ avgFps: Math.round(avgFps * 10) / 10, minFps, avgVram: Math.round(avgVram * 10) / 10, maxVram: Math.round(maxVram * 10) / 10 });
+        setMeasuring(false);
+      }
+    }, 1000);
+  }, [measuring]);
+
+  const copyMeasureResult = useCallback(() => {
+    if (!measureResult) return;
+    const text = `FPS promedio: ${measureResult.avgFps}\nFPS minimo: ${measureResult.minFps}\nVRAM promedio: ${measureResult.avgVram} MB\nVRAM maxima: ${measureResult.maxVram} MB`;
+    navigator.clipboard?.writeText(text);
+  }, [measureResult]);
+
+  useEffect(() => {
+    return () => {
+      if (measureIntervalRef.current !== null) {
+        window.clearInterval(measureIntervalRef.current);
+        measureIntervalRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <div className="relative flex h-screen w-screen overflow-hidden bg-slate-950 font-sans text-slate-100 select-none">
@@ -729,6 +782,34 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
               <div className="flex justify-between"><span>GPU</span><span className={stats.integratedGpu ? 'text-amber-400' : 'text-emerald-400'}>{stats.gpu || 'GTX 1650'}</span></div>
               <div className="flex justify-between"><span>VRAM</span><span className="text-sky-400">{stats.stream ? Math.round(stats.stream.residentBytes / (1024 * 1024)) : 0} MB</span></div>
               <div className="flex justify-between"><span>VERSIÓN</span><span className="text-emerald-400">v{APP_VERSION}</span></div>
+               <div className="mt-2 pt-1 border-t border-white/5 space-y-1">
+                 <button
+                   type="button"
+                   disabled={measuring}
+                   onClick={startMeasurement}
+                   className="w-full rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-mono text-sky-300 hover:bg-sky-500/20 disabled:opacity-50 pointer-events-auto"
+                 >
+                   {measuring ? `Midiendo... ${measureProgress}/30s` : 'Medir 30 s'}
+                 </button>
+                 {measureResult && (
+                   <div className="space-y-0.5 text-[9px] font-mono text-slate-300">
+                     <div className="flex justify-between"><span>FPS prom</span><span className="text-emerald-400">{measureResult.avgFps}</span></div>
+                     <div className="flex justify-between"><span>FPS min</span><span className="text-amber-400">{measureResult.minFps}</span></div>
+                     <div className="flex justify-between"><span>VRAM prom</span><span className="text-sky-400">{measureResult.avgVram} MB</span></div>
+                     <div className="flex justify-between"><span>VRAM max</span><span className="text-sky-400">{measureResult.maxVram} MB</span></div>
+                     <button
+                       type="button"
+                       onClick={copyMeasureResult}
+                       className="w-full rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[8px] text-slate-400 hover:text-white pointer-events-auto"
+                     >
+                       Copiar tabla
+                     </button>
+                   </div>
+                 )}
+                 <div className="text-[8px] text-slate-600 leading-tight">
+                   Escenarios: A=procedural, spawn MEX, orbita libre quieta, 30s sin tocar. B=?world=real, mismo spawn/camara. Anotar nivel de calidad usado.
+                 </div>
+               </div>
             </div>
             <div className="mt-1.5 pt-1 border-t border-white/5 text-right">
               <button type="button" className="text-slate-500 hover:text-amber-400 pointer-events-auto" onClick={logout}>SALIR ({username})</button>
