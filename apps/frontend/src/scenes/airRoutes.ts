@@ -10,6 +10,7 @@ import {
 import { pickRoute, getAirport, HOME_AIRPORT, type AirportDefinition } from './airports';
 import { haversineKm } from './geo';
 import { realAirportView } from './realAirNetwork';
+import { trueHeadingFromYaw, type MapAircraft } from './mapMarkers';
 import type { SharedAirport } from './runwayControl';
 import type { RunwayLock } from './runwaySequencer';
 import { buildAirNetwork, validateAirNetwork, type AirNetwork, type AirNode } from './airNetwork';
@@ -300,8 +301,11 @@ export class RouteTraffic {
   }
 
   /** Live snapshot for the debug console. */
-  snapshot() {
-    return this.agents.map((agent) => ({
+  snapshot(): MapAircraft[] {
+    return this.agents.map((agent, index) => ({
+      id: `route-${index}`,
+      label: `${agent.origin.code}-${agent.destination.code}`,
+      kind: 'route' as const,
       flight: `${agent.origin.code}-${agent.destination.code}`,
       destination: agent.destination.code,
       phase: agent.phase,
@@ -310,6 +314,7 @@ export class RouteTraffic {
       altitude: Math.round(agent.object.position.y),
       x: Math.round(agent.object.position.x),
       z: Math.round(agent.object.position.z),
+      headingDeg: trueHeadingFromYaw(agent.object.rotation.y),
       visible: agent.object.visible
     }));
   }

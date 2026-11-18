@@ -10,6 +10,7 @@ import { WorldManager } from './worldManager';
 import { TrafficManager, type PathNode } from './trafficManager';
 import { buildAirportGroundNetwork, validateGroundNetwork, AIRPORT_LAYOUT } from './groundNetwork';
 import { createRunwayMaterial } from './runwayMaterial';
+import { mergeTrafficMarkers, type MapAircraft } from './mapMarkers';
 import { buildRealAirportGroundNetwork, REAL_RUNWAY_DIR } from './realGroundNetwork';
 import { buildRealAirNetwork } from './realAirNetwork';
 import { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights } from './airportLights';
@@ -113,6 +114,8 @@ export interface QualityDemoHandle {
   isRealWorldMode: () => boolean;
   /** Wet-look for the procedural runway (Fase 2): sheen, reflections, darker asphalt. */
   setRunwayWet: (wet: boolean) => void;
+  /** Live markers of every AI aircraft (en-route + airport traffic), for the navigation maps. */
+  getTrafficMarkers: () => MapAircraft[];
 }
 
 type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
@@ -1780,9 +1783,9 @@ export function createQualityDemo(
           },
           routeTraffic: routeSnapshot
             ? {
-                flight: routeSnapshot.flight,
+                flight: routeSnapshot.flight ?? '',
                 phase: routeSnapshot.phase,
-                destination: routeSnapshot.destination
+                destination: routeSnapshot.destination ?? ''
               }
             : null,
           ground: {
@@ -1878,6 +1881,7 @@ export function createQualityDemo(
       else deactivateRealWorld();
     },
     isRealWorldMode: () => realWorldRequested,
-    setRunwayWet
+    setRunwayWet,
+    getTrafficMarkers: () => mergeTrafficMarkers(routeTraffic.snapshot(), trafficManager.snapshotAircraft())
   };
 }

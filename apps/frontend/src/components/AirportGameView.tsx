@@ -5,6 +5,7 @@ import type { DemoStats } from '@/scenes/qualityDemo';
 import type { BoardingStatus } from '@/scenes/boardingSystem';
 import FlightHUD from '@/components/FlightHUD';
 import { NavigationMap } from '@/components/NavigationMap';
+import { WorldMap } from '@/components/WorldMap';
 import { FlightPhysics, type FlightState } from '@/scenes/flightPhysics';
 import { TimeManager } from '@/scenes/timeSystem';
 import { APP_VERSION } from '@/version';
@@ -52,16 +53,25 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const [showControlsHelp, setShowControlsHelp] = useState(false);
   const [showMap, setShowMap] = useState(true);
   const [showRadial, setShowRadial] = useState(false);
+  const [showWorldMap, setShowWorldMap] = useState(false);
   const isRealWorld =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('world') === 'real';
   const radialRef = useRef(false);
+  const worldMapRef = useRef(false);
   const radialGateRef = useRef(0);
   const timeManagerRef = useRef<TimeManager>(new TimeManager({ timeScale: 1/60, initialHour: 12 }));
 
   useEffect(() => {
     radialRef.current = showRadial;
   }, [showRadial]);
+
+  useEffect(() => {
+    worldMapRef.current = showWorldMap;
+  }, [showWorldMap]);
+
+  /** Live AI aircraft markers for the navigation maps (stable reference). */
+  const getTrafficMarkers = useCallback(() => demoRef.current?.getTrafficMarkers() ?? [], []);
 
   const cycleCamera = useCallback(() => {
     const modes = ['AIRCRAFT_FOLLOW', 'COCKPIT_VIEW', 'FREE_ORBIT', 'PARKING_VIEW'] as const;
@@ -138,9 +148,19 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
       setShowRadial(false);
       return;
     }
-    // While the radial menu is open the aircraft ignores control keys, so a
-    // click on the menu cannot also push the throttle or the yoke.
-    if (radialRef.current) return;
+    // Full navigation map (M) and close with M or Esc.
+    if (key === 'm' && !e.repeat) {
+      e.preventDefault();
+      setShowWorldMap((open) => !open);
+      return;
+    }
+    if (key === 'escape') {
+      setShowWorldMap(false);
+    }
+    // While the radial menu or the full map is open the aircraft ignores
+    // control keys, so a click on the menu cannot also push the throttle
+    // or the yoke.
+    if (radialRef.current || worldMapRef.current) return;
 
     const physics = physicsRef.current;
     const current = physics.state;
@@ -416,10 +436,21 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
               </svg>
             )}
           </button>
+          {/* Full navigation map (M) */}
+          <button
+            type="button"
+            onClick={() => setShowWorldMap(true)}
+            className="pointer-events-auto absolute -top-2 left-2 z-30 rounded-full border border-white/20 bg-slate-900/80 px-2 py-1 text-[9px] font-bold text-slate-200 shadow-lg hover:bg-slate-800 transition-all duration-200"
+            title="Abrir el mapa grande (M)"
+          >
+            MAPA
+          </button>
           {/* Navigation Map with fade transition */}
           <div className={`transition-opacity duration-300 ease-in-out ${showMap ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
             <NavigationMap
               state={flightState}
+              isRealWorld={isRealWorld}
+              getTrafficMarkers={getTrafficMarkers}
               onSelectAirport={(airport) =>
                 demoRef.current?.focusAirport(airport.x, airport.z, airport.elevation)
               }
@@ -427,6 +458,20 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
           </div>
         </div>
       </div>
+
+      {/* Full navigation map (M opens/closes, Esc closes) */}
+      {showWorldMap && (
+        <WorldMap
+          state={flightState}
+          isRealWorld={isRealWorld}
+          getTrafficMarkers={getTrafficMarkers}
+          onSelectAirport={(airport) => {
+            demoRef.current?.focusAirport(airport.x, airport.z, airport.elevation);
+            setShowWorldMap(false);
+          }}
+          onClose={() => setShowWorldMap(false)}
+        />
+      )}
 
       {/* 2. Flight instruments + top-left menu button (full-screen overlay) */}
       <div className="absolute inset-0 z-10 pointer-events-none">

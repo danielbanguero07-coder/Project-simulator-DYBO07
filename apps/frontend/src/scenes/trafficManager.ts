@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { Flight, FlightStatus } from './flight';
 import { HOME_AIRPORT } from './airports';
+import { trueHeadingFromYaw, type MapAircraft } from './mapMarkers';
 import type { SharedAirport } from './runwayControl';
 import type { RunwayLock } from './runwaySequencer';
 import {
@@ -1440,6 +1441,25 @@ export class TrafficManager {
 
   getActiveFlights(): FlightWithState[] {
     return this.aircraft.map((a) => a.flight);
+  }
+
+  /**
+   * Read-only markers of the traffic aircraft, for the navigation maps
+   * (minimap + full map): position, true heading, speed and phase.
+   */
+  snapshotAircraft(): MapAircraft[] {
+    return this.aircraft.map((agent) => ({
+      id: `tm-${agent.flight.flightNumber}`,
+      label: agent.flight.flightNumber,
+      kind: 'traffic' as const,
+      x: Math.round(agent.object.position.x),
+      z: Math.round(agent.object.position.z),
+      altitude: Math.round(agent.object.position.y),
+      headingDeg: trueHeadingFromYaw(agent.yaw),
+      speed: Math.round(agent.speed),
+      phase: agent.state,
+      visible: agent.object.visible
+    }));
   }
 
   /**
