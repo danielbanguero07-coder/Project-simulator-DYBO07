@@ -18,6 +18,7 @@ export const LIGHT_COLORS = {
   edgeFar: 0xfff2c2,
   thresholdGreen: 0x2bff6a,
   thresholdRed: 0xff2f2f,
+  centerline: 0xffffff,
   taxiwayBlue: 0x4a90e2,
   taxiwayEdge: 0x2f6fb0,
   centerlineGreen: 0x2fd46a,
@@ -165,6 +166,26 @@ export function createRunwayLights(options: RunwayLightOptions = {}): RunwayLigh
     (p) => new THREE.Vector3(p.x, p.y, southZ)
   );
   group.add(buildLampRow(farThresholdPositions, LIGHT_COLORS.thresholdRed, 0.75));
+
+  // ---- Centreline lights (in-pavement, Fase 2) ----------------------------
+  // White along the middle, with the last 900 m at each end in red/white
+  // alternation and the last 300 m all red, so the runway reads at night
+  // and the landing direction is unambiguous.
+  const centerWhite: THREE.Vector3[] = [];
+  const centerRed: THREE.Vector3[] = [];
+  const CL_SPACING = 15;
+  for (let z = southZ + 30; z <= northZ - 30; z += CL_SPACING) {
+    const distEnd = Math.min(z - southZ, northZ - z);
+    const p = new THREE.Vector3(0, 0.2, z);
+    if (distEnd <= 300) centerRed.push(p);
+    else if (distEnd <= 900) {
+      (Math.round(z / CL_SPACING) % 2 === 0 ? centerRed : centerWhite).push(p);
+    } else {
+      centerWhite.push(p);
+    }
+  }
+  group.add(buildLampRow(centerWhite, LIGHT_COLORS.centerline, 0.3));
+  group.add(buildLampRow(centerRed, LIGHT_COLORS.thresholdRed, 0.3));
 
   // ---- PAPI ---------------------------------------------------------------
   // 300 m beyond the landing threshold, on the left side of the approach.

@@ -19,6 +19,16 @@ function makeContext(size: number): CanvasRenderingContext2D {
   return context;
 }
 
+/** Rectangular canvas context (the runway texture is 46 x 2600 m, not square). */
+function makeRectContext(width: number, height: number): CanvasRenderingContext2D {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('2D context unavailable');
+  return context;
+}
+
 /** Small, fast, deterministic PRNG so a level can be regenerated identically. */
 export function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
@@ -362,5 +372,222 @@ export function makeJetwayTunnelCanvas(size: number): HTMLCanvasElement {
     context.fillRect(x, size * 0.86, size / 32, size * 0.06);
   }
 
+  return context.canvas;
+}
+
+/**
+ * Procedural runway textures (Fase 2).
+ *
+ * The runway is 46 x 2600 m, so unlike the tiled asphalt it gets one
+ * dedicated non-repeating texture drawn to scale. All drawing happens in a
+ * metre coordinate system: the context is scaled so x spans 0..46 (west to
+ * east) and y spans 0..2600 (north threshold 18R to south threshold 36L),
+ * which is also how the plane's UVs map (canvas top = north end). Fonts,
+ * line widths and rectangles are therefore all expressed in metres, and the
+ * same layout code paints the colour map and the roughness map.
+ *
+ * Resolution note: at 1024x8192 the texture carries ~22 px/m across but
+ * only ~3 px/m along the runway, so sub-metre asphalt grain is drawn
+ * coarser than on the tiled asphalt — the markings, tyre marks and
+ * roughness variation are what the eye reads from the air anyway.
+ */
+
+/** Real procedural runway: 46 m wide, 2600 m long (36L/18R). */
+export const RUNWAY_LENGTH_M = 2600;
+export const RUNWAY_WIDTH_M = 46;
+
+interface RunwayMarkingPalette {
+  /** Painted markings: worn white in colour, mid-grey in roughness. */
+  paint: string;
+  /** Rubber deposits in the touchdown zones. */
+  rubber: string;
+}
+
+/**
+ * Paints the full ICAO-style layout for one runway: edge stripes, centreline
+ * dashes, threshold bars, touchdown-zone pairs, aiming point, the "36L" /
+ * "18R" designators and the rubber deposits. The context must already be
+ * scaled to metres (see makeRunwayCanvas). The designators read from their
+ * approach side: "36L" upright for the south approach, "18R" rotated 180
+ * degrees for the north approach.
+ */
+function drawRunwayMarkings(context: CanvasRenderingContext2D, palette: RunwayMarkingPalette): void {
+  const W = RUNWAY_WIDTH_M;
+  const L = RUNWAY_LENGTH_M;
+  const cx = W / 2;
+
+  context.fillStyle = palette.paint;
+
+  // Edge stripes: continuous, 0.9 m wide, just inside each edge.
+  context.fillRect(0.9, 0, 0.9, L);
+  context.fillRect(W - 1.8, 0, 0.9, L);
+
+  // Centreline dashes: 30 m dash, 20 m gap, 0.9 m wide, clear of the
+  // threshold bars at both ends.
+  for (let v = 150; v + 30 <= L - 150; v += 50) {
+    context.fillRect(cx - 0.45, v, 0.9, 30);
+  }
+
+  // Threshold bars ("piano keys"): 8 stripes, 1.75 m wide and 30 m long,
+  // starting 6 m past each threshold.
+  for (let i = 0; i < 8; i++) {
+    const u = 3 + 0.875 + i * 5.46;
+    context.fillRect(u, 6, 1.75, 30);
+    context.fillRect(u, L - 36, 1.75, 30);
+  }
+
+  // Touchdown-zone pairs at 150 m intervals from each threshold. The 300 m
+  // pair is the aiming point and is drawn bigger.
+  for (const fromEnd of [150, 300, 450, 600, 750, 900]) {
+    const aiming = fromEnd === 300;
+    const barWidth = aiming ? 6 : 3;
+    const barLength = aiming ? 30 : 22.5;
+    for (const v of [fromEnd, L - fromEnd]) {
+      context.fillRect(cx - 6.75 - barWidth / 2, v - barLength / 2, barWidth, barLength);
+      context.fillRect(cx + 6.75 - barWidth / 2, v - barLength / 2, barWidth, barLength);
+    }
+  }
+
+  // Runway designators, 9 m digits, centred 100 m past each threshold.
+  // "36L" sits at the south end and reads upright for the south approach
+  // (digit tops toward the north, i.e. the canvas top); "18R" sits at the
+  // north end and is rotated 180 degrees for the north approach.
+  context.font = 'bold 9px sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText('36L', cx, L - 100);
+  context.save();
+  context.translate(cx, 100);
+  context.rotate(Math.PI);
+  context.fillText('18R', 0, 0);
+  context.restore();
+
+  // Rubber deposits: heavy dark streaks on the main-gear tracks in the
+  // touchdown zones (150-500 m past each threshold), drawn over the paint
+  // so they mute it, as on a real runway.
+  const random = mulberry32(0x36c0ffee);
+  context.fillStyle = palette.rubber;
+  for (const zoneStart of [150, L - 500]) {
+    for (const side of [-3.5, 3.5]) {
+      for (let i = 0; i < 12; i++) {
+        const v = zoneStart + random() * 350;
+        const length = 30 + random() * 90;
+        context.globalAlpha = 0.15 + random() * 0.3;
+        context.fillRect(cx + side - 1.25 + (random() - 0.5) * 0.8, v, 2.5, length);
+      }
+    }
+  }
+  context.globalAlpha = 1;
+}
+
+/** Asphalt base for the colour map: blotches, aggregate and cracks, in metres. */
+function drawRunwayAsphaltBase(context: CanvasRenderingContext2D): void {
+  const random = mulberry32(0x51ed270b);
+  const W = RUNWAY_WIDTH_M;
+  const L = RUNWAY_LENGTH_M;
+
+  context.fillStyle = '#2b2f36';
+  context.fillRect(0, 0, W, L);
+
+  for (let i = 0; i < 120; i++) {
+    const x = random() * W;
+    const y = random() * L;
+    const radius = 2 + random() * 16;
+    const tone = 38 + Math.floor(random() * 22);
+    const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `rgba(${tone}, ${tone + 3}, ${tone + 7}, 0.3)`);
+    gradient.addColorStop(1, `rgba(${tone}, ${tone + 3}, ${tone + 7}, 0)`);
+    context.fillStyle = gradient;
+    context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  }
+
+  for (let i = 0; i < 6000; i++) {
+    const tone = 34 + Math.floor(random() * 58);
+    const grain = 0.3 + random() * 0.9;
+    context.fillStyle = `rgba(${tone}, ${tone + 3}, ${tone + 6}, ${0.25 + random() * 0.4})`;
+    context.fillRect(random() * W, random() * L, grain, grain);
+  }
+
+  for (let i = 0; i < 30; i++) {
+    let x = random() * W;
+    let y = random() * L;
+    context.strokeStyle = `rgba(63, 68, 74, ${0.18 + random() * 0.3})`;
+    context.lineWidth = 0.08;
+    context.beginPath();
+    context.moveTo(x, y);
+    const steps = 3 + Math.floor(random() * 6);
+    for (let step = 0; step < steps; step++) {
+      x += (random() - 0.5) * 4;
+      y += (random() - 0.5) * 4;
+      context.lineTo(x, y);
+    }
+    context.stroke();
+  }
+}
+
+/** Grey base for the roughness map: asphalt ~235, with tonal variation. */
+function drawRunwayRoughnessBase(context: CanvasRenderingContext2D): void {
+  const random = mulberry32(0x51ed270b);
+  const W = RUNWAY_WIDTH_M;
+  const L = RUNWAY_LENGTH_M;
+
+  context.fillStyle = 'rgb(235,235,235)';
+  context.fillRect(0, 0, W, L);
+
+  for (let i = 0; i < 120; i++) {
+    const x = random() * W;
+    const y = random() * L;
+    const radius = 2 + random() * 16;
+    const tone = 220 + Math.floor(random() * 30);
+    const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `rgba(${tone}, ${tone}, ${tone}, 0.35)`);
+    gradient.addColorStop(1, `rgba(${tone}, ${tone}, ${tone}, 0)`);
+    context.fillStyle = gradient;
+    context.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+  }
+}
+
+/** Full colour map of the runway, drawn to scale in metres. */
+export function makeRunwayCanvas(width: number, height: number): HTMLCanvasElement {
+  const context = makeRectContext(width, height);
+  context.scale(width / RUNWAY_WIDTH_M, height / RUNWAY_LENGTH_M);
+  drawRunwayAsphaltBase(context);
+  drawRunwayMarkings(context, {
+    paint: 'rgba(235,238,240,0.92)',
+    rubber: 'rgba(12,13,15,1)'
+  });
+  return context.canvas;
+}
+
+/**
+ * Roughness map with the same layout: asphalt ~0.92, painted markings ~0.6
+ * (smoother, slight sheen), rubber deposits ~0.45. Values are 0-255 greys
+ * multiplied by the material roughness at render time.
+ */
+export function makeRunwayRoughnessCanvas(width: number, height: number): HTMLCanvasElement {
+  const context = makeRectContext(width, height);
+  context.scale(width / RUNWAY_WIDTH_M, height / RUNWAY_LENGTH_M);
+  drawRunwayRoughnessBase(context);
+  drawRunwayMarkings(context, {
+    paint: 'rgb(153,153,153)',
+    rubber: 'rgb(115,115,115)'
+  });
+  return context.canvas;
+}
+
+/** Subtle grain normal map: flat (128,128,255) with low-amplitude noise. */
+export function makeRunwayNormalCanvas(width: number, height: number): HTMLCanvasElement {
+  const context = makeRectContext(width, height);
+  const random = mulberry32(0x2a1d2b6b);
+  context.fillStyle = 'rgb(128,128,255)';
+  context.fillRect(0, 0, width, height);
+  context.scale(width / RUNWAY_WIDTH_M, height / RUNWAY_LENGTH_M);
+  for (let i = 0; i < 4000; i++) {
+    const r = 128 + Math.floor((random() - 0.5) * 24);
+    const g = 128 + Math.floor((random() - 0.5) * 24);
+    const size = 0.2 + random() * 0.6;
+    context.fillStyle = `rgba(${r},${g},255,0.5)`;
+    context.fillRect(random() * RUNWAY_WIDTH_M, random() * RUNWAY_LENGTH_M, size, size);
+  }
   return context.canvas;
 }

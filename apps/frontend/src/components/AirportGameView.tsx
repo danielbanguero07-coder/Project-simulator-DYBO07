@@ -38,12 +38,14 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
   const [measuring, setMeasuring] = useState(false);
   const [measureProgress, setMeasureProgress] = useState(0);
   const [measureResult, setMeasureResult] = useState<{ avgFps: number; minFps: number; avgVram: number; maxVram: number } | null>(null);
+  const [runwayWet, setRunwayWetState] = useState(false);
   const measureSamplesRef = useRef<{ fps: number; vram: number }[]>([]);
   const measureIntervalRef = useRef<number | null>(null);
   const latestStatsRef = useRef<DemoStats>({ fps: 0, drawCalls: 0, triangles: 0 });
   const [gameTime, setGameTime] = useState('--:-- GMT');
   const [boarding, setBoarding] = useState<BoardingStatus[]>([]);
   const [tower, setTower] = useState<DemoStats['runway']>(undefined);
+  const [routeFlight, setRouteFlight] = useState<DemoStats['routeTraffic']>(undefined);
   const [ground, setGround] = useState<DemoStats['ground']>(undefined);
   const [serviceMsg, setServiceMsg] = useState<string | null>(null);
   const serviceTimer = useRef<number | null>(null);
@@ -239,6 +241,7 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
       if (newStats.boarding) setBoarding(newStats.boarding);
       if (newStats.runway) setTower(newStats.runway);
       if (newStats.ground) setGround(newStats.ground);
+      if (newStats.routeTraffic) setRouteFlight(newStats.routeTraffic);
     });
     demoRef.current = handle;
     // Let the physics follow the real terrain/airport elevation, so landing at
@@ -326,6 +329,18 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
     : tower.holderUse === 'arrival'
       ? 'ATERRIZAJE'
       : 'DESPEGUE';
+  const routePhaseLabels: Record<string, string> = {
+    airborne: 'EN RUTA',
+    holding: 'EN ESPERA',
+    landing: 'ATERRIZANDO',
+    taxiIn: 'RODANDO',
+    parked: 'EN PUERTA',
+    taxiOut: 'RODANDO',
+    lineup: 'EN PISTA'
+  };
+  const routePhaseLabel = routeFlight
+    ? (routePhaseLabels[routeFlight.phase] ?? routeFlight.phase.toUpperCase())
+    : null;
 
   const startMeasurement = useCallback(() => {
     if (measuring) return;
@@ -595,6 +610,14 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
               <span className="truncate">{towerHolder ?? 'Pista despejada'}</span>
               <span>{tower.queue > 0 ? `${tower.queue} en espera` : 'sin cola'}</span>
             </div>
+            {routeFlight && (
+              <div className="mt-0.5 flex justify-between text-slate-400">
+                <span className="truncate">IA · {routeFlight.flight}</span>
+                <span>
+                  {routePhaseLabel} → {routeFlight.destination}
+                </span>
+              </div>
+            )}
             {tower.holder && (
               <div className="mt-0.5 text-right text-slate-500">
                 {Math.round(tower.heldFor)} s de ocupación
@@ -790,6 +813,17 @@ export function AirportGameView({ onMenuBack }: { onMenuBack?: () => void }) {
                    className="w-full rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-mono text-sky-300 hover:bg-sky-500/20 disabled:opacity-50 pointer-events-auto"
                  >
                    {measuring ? `Midiendo... ${measureProgress}/30s` : 'Medir 30 s'}
+                 </button>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     const next = !runwayWet;
+                     setRunwayWetState(next);
+                     demoRef.current?.setRunwayWet(next);
+                   }}
+                   className="w-full rounded border border-white/10 bg-white/5 px-1.5 py-0.5 text-[9px] font-mono text-slate-300 hover:text-white pointer-events-auto"
+                 >
+                   {runwayWet ? 'Pista seca' : 'Pista mojada'}
                  </button>
                  {measureResult && (
                    <div className="space-y-0.5 text-[9px] font-mono text-slate-300">

@@ -9,7 +9,9 @@ import { TextureStreamer, type TextureQualityCap } from './textureStreaming';
 import { WorldManager } from './worldManager';
 import { TrafficManager, type PathNode } from './trafficManager';
 import { buildAirportGroundNetwork, validateGroundNetwork, AIRPORT_LAYOUT } from './groundNetwork';
-import { buildRealAirportGroundNetwork } from './realGroundNetwork';
+import { createRunwayMaterial } from './runwayMaterial';
+import { buildRealAirportGroundNetwork, REAL_RUNWAY_DIR } from './realGroundNetwork';
+import { buildRealAirNetwork } from './realAirNetwork';
 import { createRunwayLights, createTaxiwayLights, createJetwayLights, createHoldLights } from './airportLights';
 import { createHomeAirportSigns } from './airportSigns';
 import { createApronMarkings } from './apronMarkings';
@@ -50,6 +52,12 @@ export interface DemoStats {
     heldFor: number;
     queue: number;
   };
+  /** First en-route aircraft: flight, phase and destination (tower status line). */
+  routeTraffic?: {
+    flight: string;
+    phase: string;
+    destination: string;
+  } | null;
   /** Ground services authorised for the player's aircraft at its stand. */
   ground?: {
     gate: number | null;
@@ -103,6 +111,8 @@ export interface QualityDemoHandle {
   setRealWorldMode: (enabled: boolean) => void;
   /** True while the real-world layer is requested/active. */
   isRealWorldMode: () => boolean;
+  /** Wet-look for the procedural runway (Fase 2): sheen, reflections, darker asphalt. */
+  setRunwayWet: (wet: boolean) => void;
 }
 
 type CameraMode = 'AIRCRAFT_FOLLOW' | 'FREE_ORBIT' | 'COCKPIT_VIEW' | 'PARKING_VIEW';
@@ -413,8 +423,12 @@ export function createQualityDemo(
   const airportGroup = new THREE.Group();
   airportGroup.name = 'proceduralAirport';
   // ===== AIRPORT GEOMETRY =====
-  // Runway 36L / 18R
-  const runway = new THREE.Mesh(new THREE.PlaneGeometry(46, 2600), asphaltMat);
+  // Runway 36L / 18R: its own non-tiled texture (Fase 2) — colour, roughness
+  // and normal maps drawn to scale, with centreline, threshold bars,
+  // touchdown marks, the "36L"/"18R" designators and tyre deposits. The
+  // taxiways keep the shared tiled asphalt.
+  const { material: runwayMat, setWet: setRunwayWet } = createRunwayMaterial(premium);
+  const runway = new THREE.Mesh(new THREE.PlaneGeometry(46, 2600), runwayMat);
   runway.rotation.x = -Math.PI / 2;
   runway.position.set(0, 0.06, 0);
   runway.receiveShadow = true;
@@ -1242,7 +1256,57 @@ export function createQualityDemo(
   trafficManager.seedAmbientTraffic(8);
 
   // Aircraft flying between the home hub and the remote airports.
-  const routeTraffic = new RouteTraffic(scene, { premium, count: premium ? 6 : 4, shared: sharedAirport, runway: runwaySequencer });
+  // Real mode (Fase 1): a single test flight MEX <-> GDL on the real air
+  // network, with the real MEX ground spots read from the active ground
+  // network (the single source of truth for gate positions).
+  const realAirNetwork = realModeFromUrl ? buildRealAirNetwork() : undefined;
+  const realGroundSpots = realModeFromUrl
+    ? (() => {
+        const stands = network.gates
+          .map((gate) => {
+            const node = trafficManager.getNode(gate.gateNode);
+            return node
+              ? {
+                  id: gate.gateId,
+                  position: node.position
+                    .clone()
+                    .setY(HOME_AIRPORT.elevationRealM + 2)
+                }
+              : null;
+          })
+          .filter(
+            (s): s is { id: number; position: THREE.Vector3 } => s !== null
+          );
+        const hold = trafficManager.getNode(network.departureHold)?.position;
+        const threshold = trafficManager.getNode(
+          network.runwayThreshold
+        )?.position;
+        const queue = hold
+          ? [0, 1, 2].map((slot) =>
+              hold
+                .clone()
+                .addScaledVector(REAL_RUNWAY_DIR, slot * 55)
+                .setY(HOME_AIRPORT.elevationRealM + 2)
+            )
+          : [];
+        return {
+          stands,
+          queue,
+          threshold: threshold
+            ? threshold.clone().setY(HOME_AIRPORT.elevationRealM + 2)
+            : new THREE.Vector3()
+        };
+      })()
+    : undefined;
+  const routeTraffic = new RouteTraffic(scene, {
+    premium,
+    count: realModeFromUrl ? 1 : (premium ? 6 : 4),
+    shared: sharedAirport,
+    runway: runwaySequencer,
+    realNetwork: realAirNetwork,
+    realMode: realModeFromUrl,
+    realGround: realGroundSpots
+  });
 
   const networkReport = validateGroundNetwork(trafficManager, network);
   if (networkReport.ok) {
@@ -1278,6 +1342,7 @@ export function createQualityDemo(
       focusAirport?: (x: number, z: number, elevation: number) => void;
       setTime?: (hour: number) => void;
       getTime?: () => number;
+      setRunwayWet?: (wet: boolean) => void;
     };
   }).__sim = {
     trafficManager,
@@ -1298,7 +1363,8 @@ export function createQualityDemo(
     THREE,
     realWorld: null as RealWorldTiles | null,
     setTime: (hour: number) => timeManager.setHour(hour),
-    getTime: () => timeManager.getHour()
+    getTime: () => timeManager.getHour(),
+    setRunwayWet
   };
 
   // ===== CAMERA =====
@@ -1670,12 +1736,15 @@ export function createQualityDemo(
     } else {
       pushbackTug.visible = false;
     }
-    // The schedule and the en-route traffic stay frozen in real mode: they
-    // fly the procedural air network (airNetwork.ts), whose MEX final and
-    // runway are still the north-south procedural ones. Re-anchoring them
-    // to the real 05L/23R needs real air nodes, which is a later phase.
+    // The schedule stays frozen in real mode: its flights are MEX ground
+    // operations on the procedural schedule. The en-route traffic flies
+    // the real air network in real mode (Fase 1): it runs when the tiles
+    // are off, or when the real network was built at load (?world=real).
+    // If the tiles were toggled on mid-session, the graph is still the
+    // procedural one, so traffic stays frozen on it instead of flying
+    // over the real city on procedural nodes.
     if (!realWorldRequested) scheduleManager.update(dt);
-    if (!realWorldRequested) routeTraffic.update(dt);
+    if (!realWorldRequested || realModeFromUrl) routeTraffic.update(dt);
     worldManager.update(camera.position);
     textureStreamer.update(camera, container.clientHeight);
 
@@ -1696,6 +1765,7 @@ export function createQualityDemo(
     if (statsAccumulator.time >= 1) {
       if (onStats) {
         const runwaySnapshot = runwaySequencer.snapshot();
+        const routeSnapshot = routeTraffic.snapshot()[0];
         onStats({
           fps: Math.round(statsAccumulator.frames / statsAccumulator.time),
           drawCalls: renderer.info.render.calls,
@@ -1708,6 +1778,13 @@ export function createQualityDemo(
             heldFor: runwaySnapshot.heldFor,
             queue: runwaySnapshot.queue.length
           },
+          routeTraffic: routeSnapshot
+            ? {
+                flight: routeSnapshot.flight,
+                phase: routeSnapshot.phase,
+                destination: routeSnapshot.destination
+              }
+            : null,
           ground: {
             gate: playerGround.gateId,
             boarding: playerGround.boarding,
@@ -1800,6 +1877,7 @@ export function createQualityDemo(
       if (enabled) void activateRealWorld();
       else deactivateRealWorld();
     },
-    isRealWorldMode: () => realWorldRequested
+    isRealWorldMode: () => realWorldRequested,
+    setRunwayWet
   };
 }

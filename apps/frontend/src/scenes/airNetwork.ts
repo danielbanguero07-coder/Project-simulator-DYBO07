@@ -235,9 +235,15 @@ export function buildAirNetwork(airports: AirportDefinition[] = ALL_AIRPORTS): A
       cargo: route.cargo
     });
   }
+  // The endpoints come from the `airports` argument, not from getAirport:
+  // the real network (realAirNetwork.ts) passes real-world views whose
+  // coordinates are hundreds of kilometres apart, and a waypoint built
+  // from the procedural catalogue would sit next to MEX at the wrong
+  // altitude instead of midway on the real leg.
+  const byCode = new Map(airports.map((a) => [a.code, a]));
   for (const route of directedRoutes) {
-    const origin = getAirport(route.origin);
-    const destination = getAirport(route.destination);
+    const origin = byCode.get(route.origin) ?? getAirport(route.origin);
+    const destination = byCode.get(route.destination) ?? getAirport(route.destination);
     if (!origin || !destination) continue;
     const midX = (origin.x + destination.x) / 2;
     const midZ = (origin.z + destination.z) / 2;

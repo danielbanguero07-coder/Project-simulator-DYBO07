@@ -8,6 +8,8 @@ import {
   type FleetSpec
 } from './fleet';
 import { pickRoute, getAirport, HOME_AIRPORT, type AirportDefinition } from './airports';
+import { haversineKm } from './geo';
+import { realAirportView } from './realAirNetwork';
 import type { SharedAirport } from './runwayControl';
 import type { RunwayLock } from './runwaySequencer';
 import { buildAirNetwork, validateAirNetwork, type AirNetwork, type AirNode } from './airNetwork';
@@ -89,6 +91,27 @@ interface AirAgent {
   holdingAngle: number;
   /** Stack level assigned at the holding fix (0..3): altitude + radius. */
   holdingLevel: number;
+  /**
+   * Real mode (Fase 1): false until the test flight has flown its first
+   * departure from its origin. A parked aircraft that has not departed
+   * yet flies its route as-is; a turnaround swaps origin and destination
+   * first (see startFirstLeg vs startReturnLeg). Always true in
+   * procedural mode, where parked spawns keep their legacy behaviour.
+   */
+  hasDeparted: boolean;
+}
+
+/** Real MEX ground spots for the en-route traffic (Fase 1), read from the
+ *  active ground network in qualityDemo.ts: the single source of truth
+ *  for gate positions, so route traffic parks on the real stands instead
+ *  of the procedural ones (x = 130, north-south gate line). */
+export interface RealGroundSpots {
+  /** Real stands, one per gate id, at the destination elevation + 2 m. */
+  stands: { id: number; position: THREE.Vector3 }[];
+  /** Departure queue spots on the real taxiway, beside the 05 threshold. */
+  queue: THREE.Vector3[];
+  /** Real 05 threshold: where the takeoff roll starts. */
+  threshold: THREE.Vector3;
 }
 
 export interface RouteTrafficOptions {
@@ -98,7 +121,22 @@ export interface RouteTrafficOptions {
   shared?: SharedAirport;
   /** Fair FIFO queue for the runway (falls back to the raw lock). */
   runway?: RunwayLock;
+  /** Real air network (Fase 1): when present, flights use it instead of the procedural one. */
+  realNetwork?: AirNetwork;
+  /** Real mode: MEX ground spots come from the real network, routes are MEX <-> GDL only. */
+  realMode?: boolean;
+  /** Real MEX ground spots (only used when realMode is true). */
+  realGround?: RealGroundSpots;
 }
+
+/** En-route time compression in real mode (Fase 1): legs between real
+ *  airports are hundreds of kilometres, so a flight far from its
+ *  destination advances 60x. Near the airports everything runs at 1x,
+ *  so takeoffs, approaches and landings still play out in real time.
+ *  At 60x the MEX-GDL round trip takes ~6 minutes of real time. */
+const REAL_ENROUTE_TIME_SCALE = 60;
+/** Inside this distance of the destination runway the flight runs at 1x. */
+const REAL_ENROUTE_MIN_DIST_M = 5000;
 
 const SPEC_POOL = ['A320', 'B737', 'A321', 'A350', 'B787', 'A380'];
 
@@ -193,17 +231,22 @@ export class RouteTraffic {
   private runwaySequencer?: RunwayLock;
   /** Azimuth route graph built from airports.ts (see airNetwork.ts). */
   private network: AirNetwork;
+  /** Real mode (Fase 1): flights use the real air network and the real MEX ground spots. */
+  private realMode: boolean;
+  private realGround?: RealGroundSpots;
 
   constructor(scene: THREE.Scene, options: RouteTrafficOptions = {}) {
     this.scene = scene;
     this.shared = options.shared;
     this.runwaySequencer = options.runway;
     this.premium = options.premium ?? true;
-    this.network = buildAirNetwork();
+    this.realMode = options.realMode ?? false;
+    this.realGround = options.realGround;
+    this.network = options.realNetwork ?? buildAirNetwork();
     const report = validateAirNetwork(this.network);
     if (report.ok) {
       console.info(
-        `[air-network] OK · ${report.nodeCount} nodes, ${report.edgeCount} links`
+        `[air-network] ${this.realMode ? 'real' : 'procedural'} OK · ${report.nodeCount} nodes, ${report.edgeCount} links`
       );
     } else {
       console.error('[air-network] invalid network', report.errors);
@@ -260,6 +303,7 @@ export class RouteTraffic {
   snapshot() {
     return this.agents.map((agent) => ({
       flight: `${agent.origin.code}-${agent.destination.code}`,
+      destination: agent.destination.code,
       phase: agent.phase,
       t: Number(agent.t.toFixed(3)),
       speed: Math.round(agent.speed),
@@ -268,6 +312,19 @@ export class RouteTraffic {
       z: Math.round(agent.object.position.z),
       visible: agent.object.visible
     }));
+  }
+
+  /**
+   * Stand position for a MEX gate: the real gate from the ground network
+   * in real mode, the procedural stand (x = 130) otherwise. The returned
+   * vector is a fresh copy at the airport elevation + 2 m.
+   */
+  private mexStand(gateId: number, elevation: number): THREE.Vector3 {
+    if (this.realMode && this.realGround) {
+      const found = this.realGround.stands.find((s) => s.id === gateId);
+      if (found) return found.position.clone();
+    }
+    return standForGate(gateId, elevation);
   }
 
   private spawn(preferHomeRoute: boolean, index = 0) {
@@ -279,8 +336,29 @@ export class RouteTraffic {
     if (preferHomeRoute && route.origin !== HOME_AIRPORT.code) {
       route = pickRoute(cargo, HOME_AIRPORT.code);
     }
-    const origin = getAirport(route.origin) ?? HOME_AIRPORT;
-    const destination = getAirport(route.destination) ?? HOME_AIRPORT;
+    // Real mode, first cut (Fase 1): a single test flight MEX <-> GDL on
+    // the real network. It starts parked at a MEX gate and departs after
+    // a short turnaround, so the takeoff on the real 05L is visible.
+    if (this.realMode) {
+      const gdl = getAirport('GDL') ?? HOME_AIRPORT;
+      route = {
+        origin: HOME_AIRPORT.code,
+        destination: 'GDL',
+        distanceKm: haversineKm(
+          HOME_AIRPORT.lat,
+          HOME_AIRPORT.lon,
+          gdl.lat,
+          gdl.lon
+        ),
+        cargo: false
+      };
+    }
+    const origin = this.realMode
+      ? realAirportView(getAirport(route.origin) ?? HOME_AIRPORT)
+      : (getAirport(route.origin) ?? HOME_AIRPORT);
+    const destination = this.realMode
+      ? realAirportView(getAirport(route.destination) ?? HOME_AIRPORT)
+      : (getAirport(route.destination) ?? HOME_AIRPORT);
 
     const distance = Math.max(
       1,
@@ -295,11 +373,13 @@ export class RouteTraffic {
     // Not every aircraft starts in the air: one in three starts parked at
     // its origin, part-way through its turnaround, so the sky is not a
     // constant stream of planes all buzzing the same legs at once.
-    const startsParked = index % 3 === 2;
+    // Real mode: the single test flight always starts parked at MEX, with
+    // a short turnaround so its departure on the real 05L is visible soon.
+    const startsParked = this.realMode ? true : index % 3 === 2;
     // Longer turnaround (45-70 s) also eases the runway: with 10 aircraft
     // on a single runway, a short turnaround would have a landing or a
     // takeoff every few seconds, more than one runway can handle.
-    const parkedDuration = 45 + Math.random() * 25;
+    const parkedDuration = this.realMode ? 15 : 45 + Math.random() * 25;
 
     const agent: AirAgent = {
       object,
@@ -333,7 +413,11 @@ export class RouteTraffic {
       stand: standPosition(destination, index),
       holdingCenter: new THREE.Vector3(),
       holdingAngle: 0,
-      holdingLevel: 0
+      holdingLevel: 0,
+      // Real mode: the test flight has not departed yet, so its first
+      // parked phase flies the route as-is (startFirstLeg). Procedural
+      // parked spawns keep their legacy behaviour (hasDeparted = true).
+      hasDeparted: startsParked ? !this.realMode : true
     };
 
     this.scene.add(object);
@@ -347,9 +431,17 @@ export class RouteTraffic {
           const gateId = HOME_GATE_IDS[(index + k) % HOME_GATE_IDS.length];
           if (this.shared.requestGate(gateId, `route-${index}`)) {
             agent.gateId = gateId;
-            stand = standForGate(gateId, origin.elevation);
+            stand = this.mexStand(gateId, origin.elevation);
             break;
           }
+        }
+      } else if (this.realMode && this.realGround && origin.code === HOME_AIRPORT.code) {
+        // No shared controller (headless test): park at the first real
+        // stand instead of the procedural one.
+        const first = this.realGround.stands[0];
+        if (first) {
+          agent.gateId = first.id;
+          stand = first.position.clone();
         }
       }
       agent.stand = stand;
@@ -587,11 +679,6 @@ export class RouteTraffic {
     if (agent.destination.code === HOME_AIRPORT.code && this.mexQueueFull(agent)) {
       return false;
     }
-    // Leaving the stand frees its MEX gate for another aircraft.
-    if (this.shared && agent.gateId !== null) {
-      this.shared.releaseGate(`route-${agent.index}`);
-      agent.gateId = null;
-    }
     const previousOrigin = agent.origin;
     agent.origin = agent.destination;
     agent.destination = previousOrigin;
@@ -600,6 +687,35 @@ export class RouteTraffic {
       origin: agent.origin.code,
       destination: agent.destination.code
     };
+    return this.beginDeparture(agent);
+  }
+
+  /**
+   * Start the first departure (real mode, Fase 1). The test flight is
+   * parked at its origin (MEX) and flies its route as-is. A turnaround
+   * swaps origin and destination first (see startReturnLeg); doing that
+   * here would send the aircraft to the wrong airport from the wrong
+   * stand, so this path skips the swap.
+   */
+  private startFirstLeg(agent: AirAgent): boolean {
+    if (agent.origin.code === HOME_AIRPORT.code && this.mexQueueFull(agent)) {
+      return false;
+    }
+    return this.beginDeparture(agent);
+  }
+
+  /**
+   * Leave the stand and taxi out for departure on the current leg
+   * (origin -> destination). Shared by the first departure and by every
+   * turnaround; only the caller decides whether origin/destination were
+   * swapped first.
+   */
+  private beginDeparture(agent: AirAgent): boolean {
+    // Leaving the stand frees its MEX gate for another aircraft.
+    if (this.shared && agent.gateId !== null) {
+      this.shared.releaseGate(`route-${agent.index}`);
+      agent.gateId = null;
+    }
     agent.distance = Math.max(
       1,
       Math.hypot(
@@ -622,20 +738,27 @@ export class RouteTraffic {
     // skipped so two aircraft never share a stand-in point.
     const yaw = headingToYaw(agent.origin.headingDeg);
     if (agent.origin.code === HOME_AIRPORT.code) {
-      const used = new Set<number>();
-      for (const other of this.agents) {
-        if (other === agent || other.origin.code !== HOME_AIRPORT.code) continue;
-        if (other.phase !== 'taxiOut') continue;
-        used.add(Math.round((QUEUE_Z_FIRST - other.taxiTo.z) / QUEUE_Z_SPACING));
+      if (this.realMode && this.realGround && this.realGround.queue.length > 0) {
+        // Real mode: the queue spots on the real taxiway, beside the 05
+        // threshold. A single test flight always takes the first spot.
+        agent.taxiFrom.copy(agent.object.position);
+        agent.taxiTo.copy(this.realGround.queue[0]);
+      } else {
+        const used = new Set<number>();
+        for (const other of this.agents) {
+          if (other === agent || other.origin.code !== HOME_AIRPORT.code) continue;
+          if (other.phase !== 'taxiOut') continue;
+          used.add(Math.round((QUEUE_Z_FIRST - other.taxiTo.z) / QUEUE_Z_SPACING));
+        }
+        let slot = 0;
+        while (slot < QUEUE_SLOTS - 1 && used.has(slot)) slot++;
+        agent.taxiFrom.copy(agent.object.position);
+        agent.taxiTo.set(
+          QUEUE_X,
+          agent.origin.elevation + 2,
+          QUEUE_Z_FIRST - slot * QUEUE_Z_SPACING
+        );
       }
-      let slot = 0;
-      while (slot < QUEUE_SLOTS - 1 && used.has(slot)) slot++;
-      agent.taxiFrom.copy(agent.object.position);
-      agent.taxiTo.set(
-        QUEUE_X,
-        agent.origin.elevation + 2,
-        QUEUE_Z_FIRST - slot * QUEUE_Z_SPACING
-      );
     } else {
       const perpX = Math.cos(yaw);
       const perpZ = -Math.sin(yaw);
@@ -752,7 +875,17 @@ export class RouteTraffic {
             agent.runwayFor = 'landing';
           }
 
-          if (this.flyToNode(agent, target, dt)) {
+          // Real mode (Fase 1): far from the destination the leg is
+          // hundreds of kilometres, so the flight advances 30x. Within
+          // 20 km of the runway it runs at 1x, so the approach still
+          // plays out in real time.
+          const farEnRoute =
+            this.realMode &&
+            runwayNode !== undefined &&
+            agent.object.position.distanceTo(runwayNode.position) > REAL_ENROUTE_MIN_DIST_M;
+          const dtFly = farEnRoute ? dt * REAL_ENROUTE_TIME_SCALE : dt;
+
+          if (this.flyToNode(agent, target, dtFly)) {
             if (target.type === 'runway' && target.airportCode === agent.destination.code) {
               this.beginLanding(agent);
               break;
@@ -877,9 +1010,22 @@ export class RouteTraffic {
                 const gateId = HOME_GATE_IDS[(agent.index + k) % HOME_GATE_IDS.length];
                 if (this.shared.requestGate(gateId, `route-${agent.index}`)) {
                   agent.gateId = gateId;
-                  stand = standForGate(gateId, agent.destination.elevation);
+                  stand = this.mexStand(gateId, agent.destination.elevation);
                   break;
                 }
+              }
+            } else if (
+              this.realMode &&
+              this.realGround &&
+              agent.destination.code === HOME_AIRPORT.code
+            ) {
+              // No shared controller (headless test): park at a real stand
+              // instead of the procedural one, like spawn() does.
+              const pick =
+                this.realGround.stands[agent.index % this.realGround.stands.length];
+              if (pick) {
+                agent.gateId = pick.id;
+                stand = pick.position.clone();
               }
             }
             agent.stand = stand;
@@ -889,11 +1035,22 @@ export class RouteTraffic {
             // taxis to its stand: the old straight line drove the aircraft
             // up the centreline while the runway had already been released.
             if (agent.destination.code === HOME_AIRPORT.code) {
-              agent.taxiMid.set(
-                72,
-                agent.destination.elevation + 2,
-                THREE.MathUtils.clamp(agent.object.position.z, -1080, 1080)
-              );
+              if (this.realMode) {
+                // Real mode: exit onto the real taxiway, 70 m to the side
+                // of the runway the terminal sits on.
+                const yaw = headingToYaw(agent.destination.headingDeg);
+                agent.taxiMid.set(
+                  agent.object.position.x + Math.cos(yaw) * 70,
+                  agent.destination.elevation + 2,
+                  agent.object.position.z - Math.sin(yaw) * 70
+                );
+              } else {
+                agent.taxiMid.set(
+                  72,
+                  agent.destination.elevation + 2,
+                  THREE.MathUtils.clamp(agent.object.position.z, -1080, 1080)
+                );
+              }
             } else {
               agent.taxiMid.copy(agent.object.position);
             }
@@ -930,8 +1087,15 @@ export class RouteTraffic {
           // destination elevation.
           agent.object.rotation.set(0, agent.yaw, 0, 'YXZ');
           if (agent.phaseTime >= agent.parkedDuration) {
+            // First departure (real mode): fly the route as-is. Every
+            // later departure is a turnaround (swap origin/destination).
             // Queue full: retry in 5 s instead of blocking the stand forever.
-            if (!this.startReturnLeg(agent)) {
+            const departed = agent.hasDeparted
+              ? this.startReturnLeg(agent)
+              : this.startFirstLeg(agent);
+            if (departed) {
+              agent.hasDeparted = true;
+            } else {
               agent.phaseTime = Math.max(0, agent.parkedDuration - 5);
             }
           }
@@ -965,11 +1129,16 @@ export class RouteTraffic {
               // Cleared: roll from the queue spot onto the threshold
               // centreline, then start the takeoff run.
               agent.taxiFrom.copy(agent.object.position);
-              agent.taxiTo.set(
-                agent.origin.x,
-                agent.origin.elevation + 2,
-                agent.origin.z + 1150
-              );
+              if (this.realMode && this.realGround) {
+                // Real mode: line up on the real 05 threshold.
+                agent.taxiTo.copy(this.realGround.threshold);
+              } else {
+                agent.taxiTo.set(
+                  agent.origin.x,
+                  agent.origin.elevation + 2,
+                  agent.origin.z + 1150
+                );
+              }
               agent.phase = 'lineup';
               agent.phaseTime = 0;
               break;
